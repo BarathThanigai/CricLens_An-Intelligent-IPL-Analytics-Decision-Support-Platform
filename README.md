@@ -1,4 +1,4 @@
-# CricLens 🏏
+# CricLens🏏
 
 ## An Intelligent IPL Analytics & Decision Support Platform using R
 
@@ -158,7 +158,7 @@ The AI interprets the question and interacts with the analytics layer to return 
         ┌────────────────────┐        ┌────────────────────┐
         │   WEB APPLICATION  │        │    AI ASSISTANT    │
         │                    │        │                    │
-        │ • Dashboard       │        │ NVIDIA NIM API      │
+        │ • Dashboard        │        │ NVIDIA NIM API     │
         │ • KPIs             │        │                    │
         │ • Charts           │        │ Natural Language   │
         │ • Filters          │        │ Query Interface    │
