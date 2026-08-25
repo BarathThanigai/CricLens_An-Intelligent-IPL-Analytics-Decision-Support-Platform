@@ -1,1 +1,18 @@
-data/raw/IPL.csv
+# Raw datasets
+data/raw/*.csv
+data/raw/*.zip
+
+# Generated R datasets
+data/processed/*.rds
+
+# R files
+.Rhistory
+.RData
+.Rproj.user/
+
+# Environment / secrets
+.Renviron
+.env
+
+# Temporary files
+*.tmp
