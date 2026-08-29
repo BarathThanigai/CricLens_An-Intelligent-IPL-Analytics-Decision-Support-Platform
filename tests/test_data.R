@@ -38,6 +38,57 @@ stopifnot(top_b$batter[1] == "V Kohli")
 stopifnot(top_b$total_runs[1] >= 9000)
 cat("  [PASS] Leading run scorer:", top_b$batter[1], "with", top_b$total_runs[1], "runs.\n\n")
 
+# Test 3A: Non-striker Run-out Validation
+cat("Test 3A: Validating Non-Striker Run-out Dismissals...\n")
+
+kohli_profile <- get_player_batting_profile(
+  df,
+  "V Kohli"
+)
+
+stopifnot(
+  kohli_profile$outs == 231
+)
+
+stopifnot(
+  abs(kohli_profile$average - 40.46) < 0.01
+)
+
+cat(
+  "  [PASS] V Kohli dismissals correctly include non-striker run-outs:",
+  kohli_profile$outs,
+  "outs, average:",
+  kohli_profile$average,
+  "\n\n"
+)
+
+
+# Test 3B: Super Over Phase Classification
+cat("Test 3B: Validating Super Over Phase Classification...\n")
+
+super_over_rows <- df %>%
+  filter(innings > 2)
+
+stopifnot(
+  nrow(super_over_rows) > 0
+)
+
+stopifnot(
+  all(super_over_rows$match_phase == "Super Over")
+)
+
+stopifnot(
+  !any(
+    super_over_rows$match_phase == "Powerplay"
+  )
+)
+
+cat(
+  "  [PASS] Super Over deliveries correctly classified as Super Over:",
+  nrow(super_over_rows),
+  "deliveries.\n\n"
+)
+
 # Test 4: Top Bowlers Analytical Sanity Check
 cat("Test 4: Validating Top Bowlers Calculation...\n")
 top_bw <- get_top_bowlers(df, top_n = 5)
@@ -71,6 +122,4 @@ query_res <- process_criclens_query("Who has the most runs in IPL?", df)
 stopifnot(grepl("V Kohli", query_res))
 cat("  [PASS] Natural language query correctly routed and answered.\n\n")
 
-cat("=====================================================\n")
-cat(" 🎉 ALL 7 TEST SUITES PASSED WITH 100% SUCCESS!       \n")
-cat("=====================================================\n")
+cat("ALL TEST SUITES PASSED WITH 100% SUCCESS!       \n")
