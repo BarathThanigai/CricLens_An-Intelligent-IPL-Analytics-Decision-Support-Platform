@@ -115,7 +115,7 @@ install.packages(c("shiny", "bslib", "dplyr", "readr", "tidyr", "stringr", "plot
 ```
 
 ### Running the Shiny Application
-Launch the app locally from R or command line:
+Launch the application locally from R or command line:
 
 ```bash
 Rscript -e "shiny::runApp('app', display.mode = 'normal')"
