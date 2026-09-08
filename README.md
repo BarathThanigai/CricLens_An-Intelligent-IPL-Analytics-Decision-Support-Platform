@@ -6,7 +6,7 @@ CricLens is a professional data analytics platform built using **R (v4.6.1)** as
 
 ---
 
-## 🌟 Key Features
+## Key Features
 
 1. **R Analytics Engine (Source of Truth)**
    - Ball-by-ball analysis of **295,732 deliveries** across **1,243 IPL matches** (2008–2026).
@@ -29,7 +29,7 @@ CricLens is a professional data analytics platform built using **R (v4.6.1)** as
 
 ---
 
-## 🏗️ Core Architecture
+## Core Architecture
 
 ```
 User Question / Interaction
@@ -47,7 +47,7 @@ User Question / Interaction
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 CricLens/
@@ -103,7 +103,7 @@ CricLens/
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - R (v4.6.1 or higher)
@@ -134,7 +134,7 @@ Rscript tests/test_data.R
 
 ---
 
-## 🛡️ AI & Safety Directives
+## AI & Safety Directives
 - **R is the Single Source of Truth**: All statistical metrics are strictly calculated by R scripts.
 - **NVIDIA NIM Integration**: NVIDIA NIM API is used solely for natural-language query interpretation and explaining R-calculated results.
 - **Secrets Management**: Set `NVIDIA_API_KEY` in environment variables or `.Renviron`. Never commit API keys to version control.
