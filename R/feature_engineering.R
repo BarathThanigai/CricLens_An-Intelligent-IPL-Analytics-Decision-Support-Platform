@@ -1,6 +1,7 @@
 # R/feature_engineering.R
 # CricLens — Feature Engineering Module
-# Constructs analytical features, match phase tags, cumulative metrics, and cached summaries
+# Constructs analytical features, match phase tags,
+# cumulative metrics, and cached analytical summaries.
 
 suppressMessages({
   library(dplyr)
@@ -13,6 +14,10 @@ if (!exists("clean_ipl_data")) {
   source("R/data_cleaning.R")
 }
 
+
+# =========================================================
+# 1. MATCH PHASE CLASSIFICATION
+# =========================================================
 
 #' Classify match phase
 #'
@@ -38,66 +43,118 @@ classify_phase <- function(over_vec, innings_vec) {
 }
 
 
-#' Main Function: Engineer Features for IPL Dataset
+# =========================================================
+# 2. FEATURE ENGINEERING
+# =========================================================
+
+#' Engineer analytical features for the IPL dataset
+#'
+#' Adds delivery-level indicators, match phases,
+#' cumulative innings metrics, and chasing metrics.
+#'
 #' @param df Cleaned IPL data frame
-#' @return Data frame with enhanced analytical features
+#' @return Feature-engineered data frame
 engineer_features <- function(df) {
 
   cat("Engineering match features, phase tags, and cumulative tracking...\n")
 
   df_feat <- df %>%
+
     mutate(
-      # Identify Super Overs explicitly from innings number
+      # Explicit Super Over identification
       is_super_over = innings > 2,
 
       # Match phase
-      match_phase = classify_phase(over, innings),
+      match_phase = classify_phase(
+        over,
+        innings
+      ),
 
-      # Display regular overs as 1-20.
-      # Super Overs remain 1 for their first over.
+      # Human-readable over number
       over_display = over + 1,
 
-      # Delivery-level features
-      is_dot_ball = (runs_total == 0 & valid_ball == 1),
-      is_four = (runs_batter == 4 & runs_not_boundary == FALSE),
-      is_six = (runs_batter == 6 & runs_not_boundary == FALSE)
+      # Delivery-level indicators
+      is_dot_ball = (
+        runs_total == 0 &
+          valid_ball == 1
+      ),
+
+      is_four = (
+        runs_batter == 4 &
+          runs_not_boundary == FALSE
+      ),
+
+      is_six = (
+        runs_batter == 6 &
+          runs_not_boundary == FALSE
+      )
     ) %>%
 
-    # Sort chronologically
-    arrange(match_id, innings, over, ball) %>%
+    # Maintain chronological delivery order
+    arrange(
+      match_id,
+      innings,
+      over,
+      ball
+    ) %>%
 
     # Cumulative metrics within each innings
-    group_by(match_id, innings) %>%
+    group_by(
+      match_id,
+      innings
+    ) %>%
+
     mutate(
       cum_valid_balls = cumsum(valid_ball),
-      cum_team_runs = cumsum(runs_total),
-      cum_team_wickets = cumsum(as.integer(is_wicket)),
+
+      cum_team_runs = cumsum(
+        runs_total
+      ),
+
+      cum_team_wickets = cumsum(
+        as.integer(is_wicket)
+      ),
 
       current_rr = ifelse(
         cum_valid_balls > 0,
-        round(cum_team_runs / (cum_valid_balls / 6), 2),
+        round(
+          cum_team_runs /
+            (cum_valid_balls / 6),
+          2
+        ),
         0
       )
     ) %>%
 
-    # Chasing metrics apply only to the second innings
+    # Chasing-specific metrics
     mutate(
+      # Standard IPL regulation innings are 20 overs.
+      # These fields are only meaningful for the second innings.
       balls_remaining = ifelse(
         innings == 2,
-        pmax(0, 120 - cum_valid_balls),
+        pmax(
+          0,
+          120 - cum_valid_balls
+        ),
         NA_real_
       ),
 
       wickets_remaining = ifelse(
         innings == 2,
-        pmax(0, 10 - cum_team_wickets),
+        pmax(
+          0,
+          10 - cum_team_wickets
+        ),
         NA_real_
       ),
 
       runs_required = ifelse(
         innings == 2 &
           !is.na(runs_target),
-        pmax(0, runs_target - cum_team_runs),
+        pmax(
+          0,
+          runs_target - cum_team_runs
+        ),
         NA_real_
       ),
 
@@ -105,7 +162,11 @@ engineer_features <- function(df) {
         innings == 2 &
           !is.na(runs_required) &
           balls_remaining > 0,
-        round(runs_required / (balls_remaining / 6), 2),
+        round(
+          runs_required /
+            (balls_remaining / 6),
+          2
+        ),
         NA_real_
       )
     ) %>%
@@ -118,33 +179,82 @@ engineer_features <- function(df) {
 }
 
 
-#' Generate and Cache Pre-computed Aggregations for High Performance Shiny UI
-generate_analytics_caches <- function(df_feat, out_dir = "data/processed") {
+# =========================================================
+# 3. ANALYTICS CACHE GENERATION
+# =========================================================
+
+#' Generate pre-computed analytical summaries
+#'
+#' These RDS files are used by the Shiny application
+#' for fast analytical queries and visualizations.
+generate_analytics_caches <- function(
+    df_feat,
+    out_dir = "data/processed"
+) {
 
   if (!dir.exists(out_dir)) {
-    dir.create(out_dir, recursive = TRUE)
+    dir.create(
+      out_dir,
+      recursive = TRUE
+    )
   }
 
-  cat("Generating pre-computed analytical summaries...\n")
+  cat(
+    "Generating pre-computed analytical summaries...\n"
+  )
 
 
-  # ---------------------------------------------------------
-  # 1. Player Batting Summary
-  # ---------------------------------------------------------
+  # =======================================================
+  # 3.1 PLAYER BATTING SUMMARY
+  # =======================================================
 
-  cat("  - Computing player batting summaries...\n")
+  cat(
+    "  - Computing player batting summaries...\n"
+  )
 
-  batting_summary <- df_feat %>%
+  # Only standard IPL innings contribute to
+  # standard batting statistics.
+  standard_batting <- df_feat %>%
+    filter(
+      innings %in% c(1, 2)
+    )
 
-    # Only normal innings should contribute to standard
-    # IPL batting statistics.
-    filter(innings %in% c(1, 2)) %>%
+  # First calculate one row per player per innings.
+  # This is required for correct highest score,
+  # fifties, and hundreds.
+  player_innings <- standard_batting %>%
+    group_by(
+      match_id,
+      innings,
+      batter
+    ) %>%
+    summarise(
+      innings_runs = sum(
+        runs_batter,
+        na.rm = TRUE
+      ),
+
+      innings_balls = sum(
+        balls_faced == 1,
+        na.rm = TRUE
+      ),
+
+      .groups = "drop"
+    )
+
+  batting_summary <- standard_batting %>%
 
     group_by(batter) %>%
 
     summarise(
-      matches = length(unique(match_id)),
-      innings = length(unique(paste(match_id, innings))),
+      matches = n_distinct(match_id),
+
+      innings = n_distinct(
+        paste(
+          match_id,
+          innings
+        )
+      ),
 
       total_runs = sum(
         runs_batter,
@@ -158,110 +268,162 @@ generate_analytics_caches <- function(df_feat, out_dir = "data/processed") {
 
       strike_rate = ifelse(
         balls_faced > 0,
-        round(total_runs / balls_faced * 100, 2),
+        round(
+          total_runs /
+            balls_faced *
+            100,
+          2
+        ),
         0
       ),
 
-      fours = sum(is_four, na.rm = TRUE),
-      sixes = sum(is_six, na.rm = TRUE),
-
-      highest_score = max(
-        tapply(
-          runs_batter,
-          match_id,
-          sum,
-          na.rm = TRUE
-        ),
+      fours = sum(
+        is_four,
         na.rm = TRUE
       ),
 
-      fifties = sum(
-        tapply(
-          runs_batter,
-          match_id,
-          function(x) sum(x) >= 50 & sum(x) < 100
-        ),
-        na.rm = TRUE
-      ),
-
-      hundreds = sum(
-        tapply(
-          runs_batter,
-          match_id,
-          function(x) sum(x) >= 100
-        ),
+      sixes = sum(
+        is_six,
         na.rm = TRUE
       ),
 
       .groups = "drop"
     )
 
+  # Correct innings-based scoring statistics
+  innings_score_summary <- player_innings %>%
+    group_by(batter) %>%
+    summarise(
 
-  # ---------------------------------------------------------
-  # Correct dismissal calculation
+      highest_score = max(
+        innings_runs,
+        na.rm = TRUE
+      ),
+
+      fifties = sum(
+        innings_runs >= 50 &
+          innings_runs < 100,
+        na.rm = TRUE
+      ),
+
+      hundreds = sum(
+        innings_runs >= 100,
+        na.rm = TRUE
+      ),
+
+      .groups = "drop"
+    )
+
+  # Correct dismissal calculation.
   #
   # IMPORTANT:
   # A player can be dismissed while being the non-striker.
   #
-  # Therefore dismissal information must be calculated from
-  # ALL rows, not only rows where the player is the batter.
-  # ---------------------------------------------------------
-
+  # Therefore dismissal information must be calculated
+  # from ALL delivery rows.
   dismissal_summary <- df_feat %>%
+
     filter(
       innings %in% c(1, 2),
       !is.na(player_out),
       player_out != ""
     ) %>%
+
     group_by(player_out) %>%
+
     summarise(
-      outs = n_distinct(
-        paste(match_id, innings, ball_no)
-      ),
+      outs = n(),
       .groups = "drop"
     ) %>%
-    rename(batter = player_out)
 
+    rename(
+      batter = player_out
+    )
 
-  # Add correct dismissal counts
   batting_summary <- batting_summary %>%
+
+    left_join(
+      innings_score_summary,
+      by = "batter"
+    ) %>%
+
     left_join(
       dismissal_summary,
       by = "batter"
     ) %>%
+
     mutate(
-      outs = coalesce(outs, 0L),
+      outs = coalesce(
+        outs,
+        0L
+      ),
+
+      highest_score = coalesce(
+        highest_score,
+        0
+      ),
+
+      fifties = coalesce(
+        fifties,
+        0L
+      ),
+
+      hundreds = coalesce(
+        hundreds,
+        0L
+      ),
 
       average = ifelse(
         outs > 0,
-        round(total_runs / outs, 2),
+        round(
+          total_runs / outs,
+          2
+        ),
         total_runs
       )
     ) %>%
-    arrange(desc(total_runs))
 
+    arrange(
+      desc(total_runs)
+    )
 
   saveRDS(
     batting_summary,
-    file.path(out_dir, "player_batting_summary.rds")
+    file.path(
+      out_dir,
+      "player_batting_summary.rds"
+    )
   )
 
 
-  # ---------------------------------------------------------
-  # 2. Player Bowling Summary
-  # ---------------------------------------------------------
+  # =======================================================
+  # 3.2 PLAYER BOWLING SUMMARY
+  # =======================================================
 
-  cat("  - Computing player bowling summaries...\n")
+  cat(
+    "  - Computing player bowling summaries...\n"
+  )
 
   bowling_summary <- df_feat %>%
 
-    filter(innings %in% c(1, 2)) %>%
+    filter(
+      innings %in% c(1, 2)
+    ) %>%
 
     group_by(bowler) %>%
 
     summarise(
-      matches = length(unique(match_id)),
-      innings = length(unique(paste(match_id, innings))),
+
+      matches = n_distinct(
+        match_id
+      ),
+
+      innings = n_distinct(
+        paste(
+          match_id,
+          innings
+        )
+      ),
 
       wickets = sum(
         is_bowler_wicket,
@@ -286,7 +448,8 @@ generate_analytics_caches <- function(df_feat, out_dir = "data/processed") {
       economy = ifelse(
         valid_balls > 0,
         round(
-          runs_given / (valid_balls / 6),
+          runs_given /
+            (valid_balls / 6),
           2
         ),
         0
@@ -294,13 +457,21 @@ generate_analytics_caches <- function(df_feat, out_dir = "data/processed") {
 
       average = ifelse(
         wickets > 0,
-        round(runs_given / wickets, 2),
+        round(
+          runs_given /
+            wickets,
+          2
+        ),
         NA_real_
       ),
 
       strike_rate = ifelse(
         wickets > 0,
-        round(valid_balls / wickets, 2),
+        round(
+          valid_balls /
+            wickets,
+          2
+        ),
         NA_real_
       ),
 
@@ -312,94 +483,151 @@ generate_analytics_caches <- function(df_feat, out_dir = "data/processed") {
       .groups = "drop"
     ) %>%
 
-    arrange(desc(wickets))
-
+    arrange(
+      desc(wickets)
+    )
 
   saveRDS(
     bowling_summary,
-    file.path(out_dir, "player_bowling_summary.rds")
+    file.path(
+      out_dir,
+      "player_bowling_summary.rds"
+    )
   )
 
 
-  # ---------------------------------------------------------
-  # 3. Team Performance Summary
-  # ---------------------------------------------------------
+  # =======================================================
+  # 3.3 TEAM PERFORMANCE SUMMARY
+  # =======================================================
 
-  cat("  - Computing team summaries...\n")
+  cat(
+    "  - Computing team summaries...\n"
+  )
 
   match_distinct <- df_feat %>%
-    distinct(match_id, .keep_all = TRUE)
+    distinct(
+      match_id,
+      .keep_all = TRUE
+    )
 
   team_summary <- match_distinct %>%
+
     filter(
       !is.na(match_won_by),
       match_won_by != "Unknown"
     ) %>%
 
-    group_by(team = match_won_by) %>%
+    group_by(
+      team = match_won_by
+    ) %>%
 
     summarise(
       total_wins = n(),
       .groups = "drop"
     ) %>%
 
-    arrange(desc(total_wins))
-
+    arrange(
+      desc(total_wins)
+    )
 
   saveRDS(
     team_summary,
-    file.path(out_dir, "team_summary.rds")
+    file.path(
+      out_dir,
+      "team_summary.rds"
+    )
   )
 
 
-  # ---------------------------------------------------------
-  # 4. Venue Summary
-  # ---------------------------------------------------------
+  # =======================================================
+  # 3.4 VENUE SUMMARY
+  # =======================================================
 
-  cat("  - Computing venue summaries...\n")
+  cat(
+    "  - Computing venue summaries...\n"
+  )
 
-  venue_summary <- df_feat %>%
+  venue_match_summary <- df_feat %>%
 
-    filter(innings %in% c(1, 2)) %>%
+    filter(
+      innings %in% c(1, 2)
+    ) %>%
 
-    group_by(venue, match_id) %>%
+    group_by(
+      venue,
+      match_id
+    ) %>%
 
     summarise(
+
       first_inn_runs = sum(
-        runs_total[innings == 1],
+        runs_total[
+          innings == 1
+        ],
         na.rm = TRUE
       ),
 
-      match_winner = first(match_won_by),
-      toss_win = first(toss_winner),
-      toss_dec = first(toss_decision),
+      match_winner = first(
+        match_won_by
+      ),
+
+      toss_win = first(
+        toss_winner
+      ),
+
+      toss_dec = first(
+        toss_decision
+      ),
 
       .groups = "drop"
-    ) %>%
+    )
+
+  venue_summary <- venue_match_summary %>%
 
     group_by(venue) %>%
 
     summarise(
+
       total_matches = n(),
 
-      avg_1st_inn_score = round(
-        mean(
-          first_inn_runs[first_inn_runs > 0],
+      avg_1st_inn_score = ifelse(
+        sum(
+          first_inn_runs > 0,
           na.rm = TRUE
+        ) > 0,
+
+        round(
+          mean(
+            first_inn_runs[
+              first_inn_runs > 0
+            ],
+            na.rm = TRUE
+          ),
+          1
         ),
-        1
+
+        NA_real_
       ),
 
       .groups = "drop"
     ) %>%
 
-    arrange(desc(total_matches))
-
+    arrange(
+      desc(total_matches)
+    )
 
   saveRDS(
     venue_summary,
-    file.path(out_dir, "venue_summary.rds")
+    file.path(
+      out_dir,
+      "venue_summary.rds"
+    )
   )
+
+
+  # =======================================================
+  # COMPLETION
+  # =======================================================
 
   cat(
     "All analytical summary caches saved to:",
@@ -409,18 +637,28 @@ generate_analytics_caches <- function(df_feat, out_dir = "data/processed") {
 }
 
 
-# Run feature engineering if executed directly
+# =========================================================
+# 4. DIRECT EXECUTION
+# =========================================================
+
 if (sys.nframe() == 0) {
 
   cleaned_file <- "data/processed/ipl_cleaned.rds"
 
   if (!file.exists(cleaned_file)) {
+
     df_clean <- clean_ipl_data()
+
   } else {
-    df_clean <- readRDS(cleaned_file)
+
+    df_clean <- readRDS(
+      cleaned_file
+    )
   }
 
-  df_feat <- engineer_features(df_clean)
+  df_feat <- engineer_features(
+    df_clean
+  )
 
   saveRDS(
     df_feat,
@@ -431,5 +669,7 @@ if (sys.nframe() == 0) {
     "Saved featured dataset to data/processed/ipl_featured.rds\n"
   )
 
-  generate_analytics_caches(df_feat)
+  generate_analytics_caches(
+    df_feat
+  )
 }

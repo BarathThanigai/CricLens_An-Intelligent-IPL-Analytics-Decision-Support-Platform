@@ -25,16 +25,12 @@ get_top_batters <- function(
       )
   }
 
-
   # Standard batting statistics exclude Super Overs
   batting_data <- data_filtered %>%
     filter(innings %in% c(1, 2))
 
-
   top_batters <- batting_data %>%
-
     group_by(batter) %>%
-
     summarise(
       matches = length(unique(match_id)),
       innings = length(unique(paste(match_id, innings))),
@@ -68,35 +64,26 @@ get_top_batters <- function(
       .groups = "drop"
     )
 
-
-  # Calculate dismissals independently from batter rows so
-  # non-striker run-outs are included.
-  dismissal_summary <- data_filtered %>%
-
+  # Calculate dismissals independently from batter rows.
+  # This correctly includes cases where a batter is dismissed
+  # as the non-striker in a run-out.
+  dismissal_summary <- batting_data %>%
     filter(
       !is.na(player_out),
       player_out != ""
     ) %>%
-
     group_by(player_out) %>%
-
     summarise(
-      outs = n_distinct(
-        paste(match_id, innings, ball_no)
-      ),
+      outs = n(),
       .groups = "drop"
     ) %>%
-
     rename(batter = player_out)
 
-
   top_batters <- top_batters %>%
-
     left_join(
       dismissal_summary,
       by = "batter"
     ) %>%
-
     mutate(
       outs = coalesce(outs, 0L),
 
@@ -106,15 +93,11 @@ get_top_batters <- function(
         total_runs
       )
     ) %>%
-
     filter(
       balls_faced >= min_balls
     ) %>%
-
     arrange(desc(total_runs)) %>%
-
     head(top_n)
-
 
   return(top_batters)
 }
@@ -137,55 +120,83 @@ get_top_bowlers <- function(
       )
   }
 
+  # Standard bowling statistics exclude Super Overs
   data_filtered <- data_filtered %>%
     filter(innings %in% c(1, 2))
-
 
   top_bowlers <- data_filtered %>%
     group_by(bowler) %>%
     summarise(
       matches = length(unique(match_id)),
       innings = length(unique(paste(match_id, innings))),
-      wickets = sum(is_bowler_wicket, na.rm = TRUE),
-      runs_given = sum(runs_bowler, na.rm = TRUE),
-      valid_balls = sum(valid_ball == 1, na.rm = TRUE),
-      overs_bowled = round(valid_balls / 6, 1),
+
+      wickets = sum(
+        is_bowler_wicket,
+        na.rm = TRUE
+      ),
+
+      runs_given = sum(
+        runs_bowler,
+        na.rm = TRUE
+      ),
+
+      valid_balls = sum(
+        valid_ball == 1,
+        na.rm = TRUE
+      ),
+
+      overs_bowled = round(
+        valid_balls / 6,
+        1
+      ),
 
       economy = ifelse(
         valid_balls > 0,
-        round(runs_given / (valid_balls / 6), 2),
+        round(
+          runs_given / (valid_balls / 6),
+          2
+        ),
         0
       ),
 
       average = ifelse(
         wickets > 0,
-        round(runs_given / wickets, 2),
+        round(
+          runs_given / wickets,
+          2
+        ),
         NA_real_
       ),
 
       strike_rate = ifelse(
         wickets > 0,
-        round(valid_balls / wickets, 2),
+        round(
+          valid_balls / wickets,
+          2
+        ),
         NA_real_
       ),
 
-      dot_balls = sum(is_dot_ball, na.rm = TRUE),
+      dot_balls = sum(
+        is_dot_ball,
+        na.rm = TRUE
+      ),
 
       dot_percent = ifelse(
         valid_balls > 0,
-        round(dot_balls / valid_balls * 100, 1),
+        round(
+          dot_balls / valid_balls * 100,
+          1
+        ),
         0
       ),
 
       .groups = "drop"
     ) %>%
-
     filter(
       valid_balls >= min_balls
     ) %>%
-
     arrange(desc(wickets)) %>%
-
     head(top_n)
 
   return(top_bowlers)
@@ -198,6 +209,7 @@ get_player_batting_profile <- function(
     player_name
 ) {
 
+  # Standard batting statistics exclude Super Overs
   p_data <- df %>%
     filter(
       batter == player_name,
@@ -207,7 +219,6 @@ get_player_batting_profile <- function(
   if (nrow(p_data) == 0) {
     return(NULL)
   }
-
 
   profile <- p_data %>%
     summarise(
@@ -231,12 +242,22 @@ get_player_batting_profile <- function(
 
       strike_rate = ifelse(
         balls_faced > 0,
-        round(total_runs / balls_faced * 100, 2),
+        round(
+          total_runs / balls_faced * 100,
+          2
+        ),
         0
       ),
 
-      fours = sum(is_four, na.rm = TRUE),
-      sixes = sum(is_six, na.rm = TRUE),
+      fours = sum(
+        is_four,
+        na.rm = TRUE
+      ),
+
+      sixes = sum(
+        is_six,
+        na.rm = TRUE
+      ),
 
       highest_score = max(
         tapply(
@@ -270,28 +291,19 @@ get_player_batting_profile <- function(
       )
     )
 
-
   # Calculate dismissals from the full dataframe.
+  #
+  # This is important because a batter can be dismissed while
+  # appearing in the non_striker column of a run-out delivery.
+  #
+  # We therefore use player_out directly instead of restricting
+  # the dismissal search to rows where batter == player_name.
   player_outs <- df %>%
-
     filter(
       innings %in% c(1, 2),
       player_out == player_name
     ) %>%
-
-    summarise(
-      outs = n_distinct(
-        paste(match_id, innings, ball_no)
-      )
-    ) %>%
-
-    pull(outs)
-
-
-  if (length(player_outs) == 0 || is.na(player_outs)) {
-    player_outs <- 0
-  }
-
+    nrow()
 
   profile$outs <- player_outs
 
@@ -304,7 +316,6 @@ get_player_batting_profile <- function(
     profile$total_runs
   )
 
-
   return(profile)
 }
 
@@ -315,15 +326,13 @@ get_player_phase_breakdown <- function(
     player_name
 ) {
 
+  # Standard batting statistics exclude Super Overs
   bat_phase <- df %>%
-
     filter(
       batter == player_name,
       innings %in% c(1, 2)
     ) %>%
-
     group_by(match_phase) %>%
-
     summarise(
       runs = sum(
         runs_batter,
@@ -337,34 +346,38 @@ get_player_phase_breakdown <- function(
 
       strike_rate = ifelse(
         balls > 0,
-        round(runs / balls * 100, 2),
+        round(
+          runs / balls * 100,
+          2
+        ),
         0
       ),
 
-      fours = sum(is_four, na.rm = TRUE),
-      sixes = sum(is_six, na.rm = TRUE),
+      fours = sum(
+        is_four,
+        na.rm = TRUE
+      ),
+
+      sixes = sum(
+        is_six,
+        na.rm = TRUE
+      ),
 
       .groups = "drop"
     )
 
-
   # Calculate dismissals by phase using player_out directly.
+  # This includes non-striker run-outs.
   phase_outs <- df %>%
-
     filter(
       player_out == player_name,
       innings %in% c(1, 2)
     ) %>%
-
     group_by(match_phase) %>%
-
     summarise(
-      outs = n_distinct(
-        paste(match_id, innings, ball_no)
-      ),
+      outs = n(),
       .groups = "drop"
     )
-
 
   bat_phase <- bat_phase %>%
     left_join(
@@ -372,19 +385,19 @@ get_player_phase_breakdown <- function(
       by = "match_phase"
     ) %>%
     mutate(
-      outs = coalesce(outs, 0L)
+      outs = coalesce(
+        outs,
+        0L
+      )
     )
 
-
+  # Standard bowling statistics exclude Super Overs
   bowl_phase <- df %>%
-
     filter(
       bowler == player_name,
       innings %in% c(1, 2)
     ) %>%
-
     group_by(match_phase) %>%
-
     summarise(
       wickets = sum(
         is_bowler_wicket,
@@ -403,13 +416,15 @@ get_player_phase_breakdown <- function(
 
       economy = ifelse(
         balls > 0,
-        round(runs_given / (balls / 6), 2),
+        round(
+          runs_given / (balls / 6),
+          2
+        ),
         0
       ),
 
       .groups = "drop"
     )
-
 
   return(
     list(
@@ -427,14 +442,15 @@ get_head_to_head_player <- function(
     bowler_name
 ) {
 
-  matchup <- df %>%
-
+  # Standard IPL innings only
+  matchup_data <- df %>%
     filter(
       batter == batter_name,
       bowler == bowler_name,
       innings %in% c(1, 2)
-    ) %>%
+    )
 
+  matchup <- matchup_data %>%
     summarise(
       batter = batter_name,
       bowler = bowler_name,
@@ -451,20 +467,37 @@ get_head_to_head_player <- function(
 
       strike_rate = ifelse(
         balls > 0,
-        round(runs / balls * 100, 2),
+        round(
+          runs / balls * 100,
+          2
+        ),
         0
       ),
 
-      # Only dismissals where the batter was actually
-      # involved in this batter-vs-bowler matchup.
+      # For batter-vs-bowler analysis, count dismissals
+      # occurring in the actual matchup rows.
+      #
+      # This avoids attributing a non-striker run-out to the
+      # bowler when the dismissal was not caused by the bowler.
       outs = sum(
         player_out == batter_name,
         na.rm = TRUE
       ),
 
-      fours = sum(is_four, na.rm = TRUE),
-      sixes = sum(is_six, na.rm = TRUE),
-      dot_balls = sum(is_dot_ball, na.rm = TRUE)
+      fours = sum(
+        is_four,
+        na.rm = TRUE
+      ),
+
+      sixes = sum(
+        is_six,
+        na.rm = TRUE
+      ),
+
+      dot_balls = sum(
+        is_dot_ball,
+        na.rm = TRUE
+      )
     )
 
   return(matchup)

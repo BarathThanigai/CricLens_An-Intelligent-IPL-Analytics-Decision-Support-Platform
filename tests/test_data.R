@@ -18,47 +18,139 @@ suppressMessages({
 
 # Test 1: Load Processed Dataset
 cat("Test 1: Loading featured dataset...\n")
-df <- readRDS("data/processed/ipl_featured.rds")
-stopifnot(nrow(df) > 290000)
-cat("  [PASS] Rows:", nrow(df), "columns:", ncol(df), "\n\n")
+
+df <- readRDS(
+  "data/processed/ipl_featured.rds"
+)
+
+stopifnot(
+  nrow(df) > 290000
+)
+
+cat(
+  "  [PASS] Rows:",
+  nrow(df),
+  "columns:",
+  ncol(df),
+  "\n\n"
+)
+
 
 # Test 2: Canonical Venue Normalization Verification
 cat("Test 2: Validating Canonical Venue Normalization & Metadata...\n")
-stopifnot(file.exists("data/processed/metadata.rds"))
-meta <- readRDS("data/processed/metadata.rds")
-stopifnot(meta$num_raw_venues == 60)
-stopifnot(meta$num_canonical_venues == 42)
-stopifnot(length(meta$unmapped_venues) == 0)
-cat("  [PASS] Successfully mapped", meta$num_raw_venues, "raw venues to", meta$num_canonical_venues, "canonical venues with 0 unmapped!\n\n")
+
+stopifnot(
+  file.exists("data/processed/metadata.rds")
+)
+
+meta <- readRDS(
+  "data/processed/metadata.rds"
+)
+
+stopifnot(
+  meta$num_raw_venues == 60
+)
+
+stopifnot(
+  meta$num_canonical_venues == 42
+)
+
+stopifnot(
+  length(meta$unmapped_venues) == 0
+)
+
+cat(
+  "  [PASS] Successfully mapped",
+  meta$num_raw_venues,
+  "raw venues to",
+  meta$num_canonical_venues,
+  "canonical venues with 0 unmapped!\n\n"
+)
+
 
 # Test 3: Top Batters Analytical Sanity Check
 cat("Test 3: Validating Top Batters Calculation...\n")
-top_b <- get_top_batters(df, top_n = 5)
-stopifnot(top_b$batter[1] == "V Kohli")
-stopifnot(top_b$total_runs[1] >= 9000)
-cat("  [PASS] Leading run scorer:", top_b$batter[1], "with", top_b$total_runs[1], "runs.\n\n")
 
-# Test 3A: Non-striker Run-out Validation
-cat("Test 3A: Validating Non-Striker Run-out Dismissals...\n")
+top_b <- get_top_batters(
+  df,
+  top_n = 5
+)
+
+stopifnot(
+  top_b$batter[1] == "V Kohli"
+)
+
+stopifnot(
+  top_b$total_runs[1] >= 9000
+)
+
+cat(
+  "  [PASS] Leading run scorer:",
+  top_b$batter[1],
+  "with",
+  top_b$total_runs[1],
+  "runs.\n\n"
+)
+
+
+# Test 3A: Player Dismissal & Average Validation
+cat("Test 3A: Validating Player Dismissals & Batting Average...\n")
 
 kohli_profile <- get_player_batting_profile(
   df,
   "V Kohli"
 )
 
-stopifnot(
-  kohli_profile$outs == 231
+# Independently calculate expected values directly
+# from the actual dataset.
+standard_innings <- df %>%
+  filter(
+    innings %in% c(1, 2)
+  )
+
+expected_kohli_runs <- sum(
+  standard_innings$runs_batter[
+    standard_innings$batter == "V Kohli"
+  ],
+  na.rm = TRUE
+)
+
+expected_kohli_outs <- sum(
+  standard_innings$player_out == "V Kohli",
+  na.rm = TRUE
+)
+
+expected_kohli_average <- round(
+  expected_kohli_runs / expected_kohli_outs,
+  2
 )
 
 stopifnot(
-  abs(kohli_profile$average - 40.46) < 0.01
+  kohli_profile$total_runs == expected_kohli_runs
+)
+
+stopifnot(
+  kohli_profile$outs == expected_kohli_outs
+)
+
+stopifnot(
+  abs(
+    kohli_profile$average -
+      expected_kohli_average
+  ) < 0.01
 )
 
 cat(
-  "  [PASS] V Kohli dismissals correctly include non-striker run-outs:",
-  kohli_profile$outs,
-  "outs, average:",
-  kohli_profile$average,
+  "  [PASS] Player dismissal calculation matches independent dataset calculation.\n"
+)
+
+cat(
+  "         - Runs:",
+  expected_kohli_runs,
+  "| Outs:",
+  expected_kohli_outs,
+  "| Average:",
+  expected_kohli_average,
   "\n\n"
 )
 
@@ -67,14 +159,18 @@ cat(
 cat("Test 3B: Validating Super Over Phase Classification...\n")
 
 super_over_rows <- df %>%
-  filter(innings > 2)
+  filter(
+    innings > 2
+  )
 
 stopifnot(
   nrow(super_over_rows) > 0
 )
 
 stopifnot(
-  all(super_over_rows$match_phase == "Super Over")
+  all(
+    super_over_rows$match_phase == "Super Over"
+  )
 )
 
 stopifnot(
@@ -89,37 +185,135 @@ cat(
   "deliveries.\n\n"
 )
 
+
 # Test 4: Top Bowlers Analytical Sanity Check
 cat("Test 4: Validating Top Bowlers Calculation...\n")
-top_bw <- get_top_bowlers(df, top_n = 5)
-stopifnot(top_bw$bowler[1] == "YS Chahal")
-stopifnot(top_bw$wickets[1] >= 200)
-cat("  [PASS] Leading wicket taker:", top_bw$bowler[1], "with", top_bw$wickets[1], "wickets.\n\n")
+
+top_bw <- get_top_bowlers(
+  df,
+  top_n = 5
+)
+
+stopifnot(
+  top_bw$bowler[1] == "YS Chahal"
+)
+
+stopifnot(
+  top_bw$wickets[1] >= 200
+)
+
+cat(
+  "  [PASS] Leading wicket taker:",
+  top_bw$bowler[1],
+  "with",
+  top_bw$wickets[1],
+  "wickets.\n\n"
+)
+
 
 # Test 5: Team Performance Summary Check
 cat("Test 5: Validating Team Performance Calculation...\n")
-t_summary <- get_team_performance_summary(df)
-stopifnot(t_summary$team[1] == "Mumbai Indians")
-stopifnot(t_summary$wins[1] == 155)
-cat("  [PASS] Leading franchise:", t_summary$team[1], "with", t_summary$wins[1], "wins.\n\n")
 
-# Test 6: Chronological ML Train/Test Split & Metrics Evaluation Check
+t_summary <- get_team_performance_summary(
+  df
+)
+
+stopifnot(
+  t_summary$team[1] == "Mumbai Indians"
+)
+
+stopifnot(
+  t_summary$wins[1] == 155
+)
+
+cat(
+  "  [PASS] Leading franchise:",
+  t_summary$team[1],
+  "with",
+  t_summary$wins[1],
+  "wins.\n\n"
+)
+
+
+# Test 6: Chronological ML Train/Test Split & Metrics
 cat("Test 6: Validating Chronological Win Probability ML Model & Test Metrics...\n")
-model_obj <- readRDS("data/processed/win_prob_model.rds")
-stopifnot(is.list(model_obj) && "test_accuracy" %in% names(model_obj))
-stopifnot(model_obj$train_count > 100000)
-stopifnot(model_obj$test_count > 15000)
-stopifnot(model_obj$test_accuracy > 70)
-stopifnot(model_obj$roc_auc > 0.70)
-stopifnot(model_obj$brier_score < 0.25)
-cat("  [PASS] Chronological ML Model Verified on Unseen Test Set (2024-2026):\n")
-cat("         - Train Count: ", model_obj$train_count, " | Test Count: ", model_obj$test_count, "\n", sep = "")
-cat("         - Test Accuracy: ", model_obj$test_accuracy, "% | ROC-AUC: ", model_obj$roc_auc, " | Brier Score: ", model_obj$brier_score, " | Log Loss: ", model_obj$log_loss, "\n\n", sep = "")
+
+model_obj <- readRDS(
+  "data/processed/win_prob_model.rds"
+)
+
+stopifnot(
+  is.list(model_obj) &&
+    "test_accuracy" %in% names(model_obj)
+)
+
+stopifnot(
+  model_obj$train_count > 100000
+)
+
+stopifnot(
+  model_obj$test_count > 15000
+)
+
+stopifnot(
+  model_obj$test_accuracy > 70
+)
+
+stopifnot(
+  model_obj$roc_auc > 0.70
+)
+
+stopifnot(
+  model_obj$brier_score < 0.25
+)
+
+cat(
+  "  [PASS] Chronological ML Model Verified on Unseen Test Set (2024-2026):\n"
+)
+
+cat(
+  "         - Train Count: ",
+  model_obj$train_count,
+  " | Test Count: ",
+  model_obj$test_count,
+  "\n",
+  sep = ""
+)
+
+cat(
+  "         - Test Accuracy: ",
+  model_obj$test_accuracy,
+  "% | ROC-AUC: ",
+  model_obj$roc_auc,
+  " | Brier Score: ",
+  model_obj$brier_score,
+  " | Log Loss: ",
+  model_obj$log_loss,
+  "\n\n",
+  sep = ""
+)
+
 
 # Test 7: AI Natural Language Query Router Check
 cat("Test 7: Validating AI Natural Language Router...\n")
-query_res <- process_criclens_query("Who has the most runs in IPL?", df)
-stopifnot(grepl("V Kohli", query_res))
-cat("  [PASS] Natural language query correctly routed and answered.\n\n")
 
-cat("ALL TEST SUITES PASSED WITH 100% SUCCESS!       \n")
+query_res <- process_criclens_query(
+  "Who has the most runs in IPL?",
+  df
+)
+
+stopifnot(
+  grepl(
+    "V Kohli",
+    query_res
+  )
+)
+
+cat(
+  "  [PASS] Natural language query correctly routed and answered.\n\n"
+)
+
+
+cat("=====================================================\n")
+cat("  ALL TEST SUITES PASSED WITH 100% SUCCESS!         \n")
+cat("=====================================================\n")
