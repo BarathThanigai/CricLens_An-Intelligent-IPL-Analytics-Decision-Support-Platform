@@ -1238,7 +1238,7 @@ execute_r_analytics <- function(
     result <- get_top_batters(
       df,
       season_filter = season,
-      n = p$top_n
+      top_n = p$top_n
     )
 
     return(
@@ -1258,7 +1258,7 @@ execute_r_analytics <- function(
     result <- get_top_bowlers(
       df,
       season_filter = season,
-      n = p$top_n
+      top_n = p$top_n
     )
 
     return(
@@ -1496,9 +1496,9 @@ format_r_result <- function(
         lines,
         paste0(
           "| **",
-          row$player,
+          row$batter,
           "** | ",
-          row$runs,
+          row$total_runs,
           " | ",
           row$innings,
           " | ",
@@ -1553,7 +1553,7 @@ format_r_result <- function(
         lines,
         paste0(
           "| **",
-          row$player,
+          row$bowler,
           "** | ",
           row$wickets,
           " | ",
@@ -1561,7 +1561,7 @@ format_r_result <- function(
           " | ",
           row$average,
           " | ",
-          row$overs,
+          row$overs_bowled,
           " | ",
           row$dot_balls,
           " |"
@@ -1601,13 +1601,13 @@ format_r_result <- function(
         row$player,
         "**\n\n",
         "- **Matches Played:** ",
-        row$matches_played,
+        row$matches,
         "\n",
         "- **Innings Batted:** ",
-        row$innings_batted,
+        row$innings,
         "\n",
         "- **Total Runs:** ",
-        row$runs,
+        row$total_runs,
         "\n",
         "- **Batting Average:** ",
         row$average,
