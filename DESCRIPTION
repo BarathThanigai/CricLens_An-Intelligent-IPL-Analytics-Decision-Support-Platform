@@ -1,0 +1,8 @@
+Package: criclens
+Title: CricLens IPL Analytics and Decision Support Platform
+Version: 1.0.0
+Authors@R: person("CricLens", "Project", role=c("aut","cre"), email="local@example.invalid")
+Description: Modular IPL ball-by-ball ingestion, analytics and Shiny decision support.
+License: MIT
+Encoding: UTF-8
+Depends: R (>= 4.1.0)

@@ -1,0 +1,5 @@
+lib <- Sys.getenv("R_LIBS_USER", unset=file.path(Sys.getenv("LOCALAPPDATA"),"R","win-library","4.6"))
+dir.create(lib,recursive=TRUE,showWarnings=FALSE)
+.libPaths(c(lib,.libPaths()))
+if(!requireNamespace("shiny",quietly=TRUE)) stop("Shiny is missing. Run .\\setup.ps1 first.")
+shiny::runApp(".",host="127.0.0.1",port=3000,launch.browser=TRUE)
