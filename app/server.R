@@ -8,45 +8,64 @@ suppressMessages({
   library(DT)
 })
 
-# Robust path helper for root vs app directory execution
-get_root_path <- function(rel_path) {
-  if (file.exists(rel_path)) {
-    return(rel_path)
-  } else if (file.exists(file.path("..", rel_path))) {
-    return(file.path("..", rel_path))
-  } else {
-    return(rel_path)
-  }
+project_root <- getOption("criclens.project_root")
+if (is.null(project_root) || !file.exists(file.path(project_root, "R", "player_analysis.R"))) {
+  root_candidates <- normalizePath(
+    c(getwd(), dirname(getwd())),
+    winslash = "/",
+    mustWork = FALSE
+  )
+  project_root <- root_candidates[
+    file.exists(file.path(root_candidates, "R", "player_analysis.R"))
+  ][1]
+}
+if (is.na(project_root) || !length(project_root)) {
+  stop("Unable to locate the CricLens project root.")
+}
+
+module_files <- file.path(
+  project_root,
+  "app",
+  "modules",
+  paste0(
+    "mod_",
+    c("overview", "players", "teams", "matches", "venues", "predictions", "ai_chat"),
+    ".R"
+  )
+)
+for (module_file in module_files) {
+  source(module_file, local = TRUE)
 }
 
 # Source R analytics engine modules
-source(get_root_path("R/player_analysis.R"), local = TRUE)
-source(get_root_path("R/team_analysis.R"), local = TRUE)
-source(get_root_path("R/match_analysis.R"), local = TRUE)
-source(get_root_path("R/venue_analysis.R"), local = TRUE)
-source(get_root_path("R/visualizations.R"), local = TRUE)
-source(get_root_path("R/predictive_models.R"), local = TRUE)
-source(get_root_path("ai/nim_client.R"), local = TRUE)
-source(get_root_path("ai/prompt_templates.R"), local = TRUE)
-source(get_root_path("ai/query_router.R"), local = TRUE)
-
-# Source Shiny server modules
-source(get_root_path("app/modules/mod_overview.R"))
-source(get_root_path("app/modules/mod_players.R"))
-source(get_root_path("app/modules/mod_teams.R"))
-source(get_root_path("app/modules/mod_matches.R"))
-source(get_root_path("app/modules/mod_venues.R"))
-source(get_root_path("app/modules/mod_predictions.R"))
-source(get_root_path("app/modules/mod_ai_chat.R"))
+source(file.path(project_root, "R", "player_analysis.R"), local = TRUE)
+source(file.path(project_root, "R", "team_analysis.R"), local = TRUE)
+source(file.path(project_root, "R", "match_analysis.R"), local = TRUE)
+source(file.path(project_root, "R", "venue_analysis.R"), local = TRUE)
+source(file.path(project_root, "R", "visualizations.R"), local = TRUE)
+source(file.path(project_root, "R", "predictive_models.R"), local = TRUE)
+source(file.path(project_root, "ai", "nim_client.R"), local = TRUE)
+source(file.path(project_root, "ai", "prompt_templates.R"), local = TRUE)
+source(file.path(project_root, "ai", "query_router.R"), local = TRUE)
 
 server <- function(input, output, session) {
   # Load pre-processed binary datasets & caches
-  df_feat <- readRDS(get_root_path("data/processed/ipl_featured.rds"))
-  batting_summary <- readRDS(get_root_path("data/processed/player_batting_summary.rds"))
-  bowling_summary <- readRDS(get_root_path("data/processed/player_bowling_summary.rds"))
-  team_summary <- readRDS(get_root_path("data/processed/team_summary.rds"))
-  venue_summary <- readRDS(get_root_path("data/processed/venue_summary.rds"))
-  win_model <- readRDS(get_root_path("data/processed/win_prob_model.rds"))
+  df_feat <- readRDS(
+    file.path(project_root, "data", "processed", "ipl_featured.rds")
+  )
+  batting_summary <- readRDS(
+    file.path(project_root, "data", "processed", "player_batting_summary.rds")
+  )
+  bowling_summary <- readRDS(
+    file.path(project_root, "data", "processed", "player_bowling_summary.rds")
+  )
+  team_summary <- get_team_performance_summary(df_feat)
+  venue_summary <- readRDS(
+    file.path(project_root, "data", "processed", "venue_summary.rds")
+  )
+  win_model <- readRDS(
+    file.path(project_root, "data", "processed", "win_prob_model.rds")
+  )
 
   # Wire Module Servers
   mod_overview_server("overview", df_feat, team_summary, batting_summary)

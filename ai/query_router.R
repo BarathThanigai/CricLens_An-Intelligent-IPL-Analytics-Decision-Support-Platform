@@ -30,16 +30,6 @@ suppressMessages({
 })
 
 # ------------------------------------------------------------------
-# Load analytics and AI dependencies
-# ------------------------------------------------------------------
-
-source("R/player_analysis.R")
-source("R/team_analysis.R")
-source("R/venue_analysis.R")
-source("ai/nim_client.R")
-source("ai/prompt_templates.R")
-
-# ------------------------------------------------------------------
 # Utility helpers
 # ------------------------------------------------------------------
 
@@ -358,6 +348,153 @@ resolve_dataset_value <- function(
   NULL
 }
 
+
+resolve_player_name <- function(
+  requested,
+  available
+) {
+
+  requested <- safe_character(
+    requested
+  )
+
+  if (is.null(requested)) {
+    return(NULL)
+  }
+
+  player_aliases <- c(
+    "virat kohli" = "V Kohli"
+  )
+  alias_name <- unname(
+    player_aliases[
+      tolower(
+        trimws(requested)
+      )
+    ]
+  )
+
+  if (
+    length(alias_name) > 0 &&
+      !is.na(alias_name) &&
+      alias_name %in% available
+  ) {
+    return(alias_name)
+  }
+
+  resolve_dataset_value(
+    requested,
+    available
+  )
+}
+
+
+player_alias_from_query <- function(
+  query,
+  available
+) {
+
+  query_lower <- tolower(
+    trimws(query)
+  )
+
+  player_aliases <- c(
+    "virat kohli" = "V Kohli"
+  )
+  alias_names <- names(player_aliases)
+  matched_aliases <- alias_names[
+    vapply(
+      alias_names,
+      function(alias) {
+        str_detect(
+          query_lower,
+          fixed(alias)
+        )
+      },
+      logical(1)
+    )
+  ]
+
+  if (length(matched_aliases) != 1) {
+    return(NULL)
+  }
+
+  resolve_player_name(
+    unname(player_aliases[matched_aliases]),
+    available
+  )
+}
+
+
+resolve_team_name_from_query <- function(
+  query,
+  available
+) {
+
+  query_lower <- tolower(
+    trimws(query)
+  )
+  available_lower <- tolower(
+    trimws(available)
+  )
+  matches <- which(
+    vapply(
+      available_lower,
+      function(team) {
+        str_detect(
+          query_lower,
+          fixed(team)
+        )
+      },
+      logical(1)
+    )
+  )
+
+  if (length(matches) == 0) {
+    return(NULL)
+  }
+
+  match_lengths <- nchar(
+    available_lower[matches]
+  )
+  longest_matches <- matches[
+    match_lengths == max(match_lengths)
+  ]
+
+  if (length(longest_matches) != 1) {
+    return(NULL)
+  }
+
+  available[longest_matches]
+}
+
+
+is_all_teams_summary_query <- function(query) {
+
+  query_lower <- tolower(
+    trimws(query)
+  )
+  patterns <- c(
+    "\\b(all|every)\\s+(the\\s+)?teams?\\b",
+    "\\bleague[- ]wide\\b",
+    "\\b(entire|whole)\\s+league\\b",
+    "\\bacross\\s+the\\s+league\\b"
+  )
+
+  any(
+    vapply(
+      patterns,
+      function(pattern) {
+        str_detect(
+          query_lower,
+          regex(pattern)
+        )
+      },
+      logical(1)
+    )
+  )
+}
+
+
 # ------------------------------------------------------------------
 # Deterministic season extraction
 # ------------------------------------------------------------------
@@ -601,6 +738,32 @@ parse_query_intent <- function(
     parameters <- list()
   }
 
+  if (intent == "player_profile") {
+    player_alias <- player_alias_from_query(
+      query,
+      get_dataset_players(df)
+    )
+
+    if (!is.null(player_alias)) {
+      parameters$player_name <- player_alias
+    }
+  }
+
+  if (intent == "team_summary") {
+    if (is_all_teams_summary_query(query)) {
+      parameters$team_name <- NULL
+    } else {
+      query_team <- resolve_team_name_from_query(
+        query,
+        get_dataset_teams(df)
+      )
+
+      if (!is.null(query_team)) {
+        parameters$team_name <- query_team
+      }
+    }
+  }
+
   # ---------------------------------------------------------------
   # Deterministic season extraction
   # ---------------------------------------------------------------
@@ -745,6 +908,23 @@ fallback_query_intent <- function(
         parameters = list(
           team1 = matched_teams[1],
           team2 = matched_teams[2],
+          season = query_season
+        )
+      )
+    )
+  }
+
+  aliased_player <- player_alias_from_query(
+    query,
+    players
+  )
+
+  if (!is.null(aliased_player)) {
+    return(
+      list(
+        intent = "player_profile",
+        parameters = list(
+          player_name = aliased_player,
           season = query_season
         )
       )
@@ -954,7 +1134,14 @@ fallback_query_intent <- function(
       list(
         intent = "team_summary",
         parameters = list(
-          team_name = NULL,
+          team_name = if (is_all_teams_summary_query(query)) {
+            NULL
+          } else {
+            resolve_team_name_from_query(
+              query,
+              teams
+            )
+          },
           season = query_season
         )
       )
@@ -1086,7 +1273,7 @@ validate_intent <- function(
 
   if (intent == "player_profile") {
 
-    player_name <- resolve_dataset_value(
+    player_name <- resolve_player_name(
       parameters$player_name,
       get_dataset_players(df)
     )
@@ -1117,6 +1304,15 @@ validate_intent <- function(
       parameters$team_name,
       get_dataset_teams(df)
     )
+
+    if (is.null(team_name)) {
+      return(
+        list(
+          intent = "unsupported",
+          parameters = list()
+        )
+      )
+    }
   }
 
   # ---------------------------------------------------------------
@@ -1237,8 +1433,8 @@ execute_r_analytics <- function(
 
     result <- get_top_batters(
       df,
-      season_filter = season,
-      n = p$top_n
+      top_n = p$top_n,
+      season_filter = season
     )
 
     return(
@@ -1257,8 +1453,8 @@ execute_r_analytics <- function(
 
     result <- get_top_bowlers(
       df,
-      season_filter = season,
-      n = p$top_n
+      top_n = p$top_n,
+      season_filter = season
     )
 
     return(
@@ -1445,14 +1641,20 @@ format_r_result <- function(
   analytics_result
 ) {
 
-  if (is.null(analytics_result)) {
+  if (
+    is.null(analytics_result) ||
+      !is.list(analytics_result)
+  ) {
 
     return(
       "I couldn't process that query."
     )
   }
 
-  intent <- analytics_result$intent
+  intent <- safe_character(
+    analytics_result$intent,
+    default = ""
+  )
   result <- analytics_result$result
 
   if (intent == "unsupported") {
@@ -1472,13 +1674,27 @@ format_r_result <- function(
   if (intent == "top_batters") {
 
     if (
-      is.null(result) ||
+      !is.data.frame(result) ||
       nrow(result) == 0
     ) {
 
       return(
         "No batting data was found for the requested criteria."
       )
+    }
+
+    required_columns <- c(
+      "batter",
+      "total_runs",
+      "innings",
+      "average",
+      "strike_rate",
+      "fours",
+      "sixes"
+    )
+
+    if (!all(required_columns %in% names(result))) {
+      return("The batting result could not be formatted.")
     }
 
     lines <- c(
@@ -1496,9 +1712,9 @@ format_r_result <- function(
         lines,
         paste0(
           "| **",
-          row$player,
+          row$batter,
           "** | ",
-          row$runs,
+          row$total_runs,
           " | ",
           row$innings,
           " | ",
@@ -1529,20 +1745,38 @@ format_r_result <- function(
   if (intent == "top_bowlers") {
 
     if (
-      is.null(result) ||
+      !is.data.frame(result) ||
       nrow(result) == 0
     ) {
-
       return(
         "No bowling data was found for the requested criteria."
       )
     }
 
+    required_columns <- c(
+      "bowler",
+      "wickets",
+      "matches",
+      "innings",
+      "overs_bowled",
+      "runs_given",
+      "economy",
+      "average",
+      "strike_rate"
+    )
+
+    if (!all(required_columns %in% names(result))) {
+      return("The bowling result could not be formatted.")
+    }
+
     lines <- c(
-      "### 🎯 Top Wicket Takers",
+      "### 🏏 Top Wicket Takers",
       "",
-      "| Bowler | Wickets | Economy | Average | Overs | Dot Balls |",
-      "| :--- | ---: | ---: | ---: | ---: | ---: |"
+      paste0(
+        "| Bowler | Wickets | Matches | Innings | Overs | Runs | Economy | ",
+        "Average | Strike Rate |"
+      ),
+      "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
     )
 
     for (i in seq_len(nrow(result))) {
@@ -1552,28 +1786,22 @@ format_r_result <- function(
       lines <- c(
         lines,
         paste0(
-          "| **",
-          row$player,
-          "** | ",
-          row$wickets,
-          " | ",
-          row$economy,
-          " | ",
-          row$average,
-          " | ",
-          row$overs,
-          " | ",
-          row$dot_balls,
+          "| **", row$bowler,
+          "** | ", row$wickets,
+          " | ", row$matches,
+          " | ", row$innings,
+          " | ", row$overs_bowled,
+          " | ", row$runs_given,
+          " | ", row$economy,
+          " | ", row$average,
+          " | ", row$strike_rate,
           " |"
         )
       )
     }
 
     return(
-      paste(
-        lines,
-        collapse = "\n"
-      )
+      paste(lines, collapse = "\n")
     )
   }
 
@@ -1584,13 +1812,30 @@ format_r_result <- function(
   if (intent == "player_profile") {
 
     if (
-      is.null(result) ||
+      !is.data.frame(result) ||
       nrow(result) == 0
     ) {
 
       return(
         "No player data was found."
       )
+    }
+
+    required_columns <- c(
+      "player",
+      "matches",
+      "innings",
+      "total_runs",
+      "average",
+      "strike_rate",
+      "fours",
+      "sixes",
+      "fifties",
+      "hundreds"
+    )
+
+    if (!all(required_columns %in% names(result))) {
+      return("The player profile could not be formatted.")
     }
 
     row <- result[1, ]
@@ -1601,13 +1846,13 @@ format_r_result <- function(
         row$player,
         "**\n\n",
         "- **Matches Played:** ",
-        row$matches_played,
+        row$matches,
         "\n",
         "- **Innings Batted:** ",
-        row$innings_batted,
+        row$innings,
         "\n",
         "- **Total Runs:** ",
-        row$runs,
+        row$total_runs,
         "\n",
         "- **Batting Average:** ",
         row$average,
@@ -1637,13 +1882,24 @@ format_r_result <- function(
   if (intent == "team_summary") {
 
     if (
-      is.null(result) ||
+      !is.data.frame(result) ||
       nrow(result) == 0
     ) {
 
       return(
         "No team data was found."
       )
+    }
+
+    required_columns <- c(
+      "team",
+      "wins",
+      "matches_played",
+      "win_pct"
+    )
+
+    if (!all(required_columns %in% names(result))) {
+      return("The team summary could not be formatted.")
     }
 
     lines <- c(
@@ -1685,17 +1941,111 @@ format_r_result <- function(
 
   if (intent == "venue_stats") {
 
-    if (is.null(result)) {
+    if (
+      is.null(result) ||
+        !is.list(result) ||
+        is.data.frame(result) ||
+        length(result) == 0
+    ) {
 
       return(
         "No venue data was found."
       )
     }
 
-    return(
+    required_fields <- c(
+      "venue",
+      "city",
+      "total_matches",
+      "avg_1st_inn",
+      "highest_1st_inn",
+      "lowest_1st_inn",
+      "bat_1st_wins",
+      "chase_wins",
+      "chase_win_pct",
+      "phase_stats"
+    )
+
+    if (!all(required_fields %in% names(result))) {
+      return("The venue result could not be formatted.")
+    }
+
+    phase_stats <- result$phase_stats
+    phase_columns <- c(
+      "match_phase",
+      "runs",
+      "balls",
+      "wickets",
+      "run_rate"
+    )
+
+    if (
+      !is.data.frame(phase_stats) ||
+        (nrow(phase_stats) > 0 &&
+           !all(phase_columns %in% names(phase_stats)))
+    ) {
+      return("The venue result could not be formatted.")
+    }
+
+    lines <- c(
       paste0(
-        "### 🏟️ Venue Statistics\n\n",
-        toString(result)
+        "### 🏟️ Venue Statistics: **",
+        result$venue,
+        "**"
+      ),
+      "",
+      paste0("- **City:** ", result$city),
+      paste0("- **Matches:** ", result$total_matches),
+      paste0("- **Average first-innings score:** ", result$avg_1st_inn),
+      paste0("- **Highest first-innings score:** ", result$highest_1st_inn),
+      paste0("- **Lowest first-innings score:** ", result$lowest_1st_inn),
+      paste0("- **Wins batting first:** ", result$bat_1st_wins),
+      paste0(
+        "- **Wins chasing:** ",
+        result$chase_wins,
+        " (",
+        result$chase_win_pct,
+        "%)"
+      ),
+      "",
+      "#### Phase Statistics",
+      ""
+    )
+
+    if (nrow(phase_stats) == 0) {
+      lines <- c(lines, "No phase statistics were found.")
+    } else {
+      lines <- c(
+        lines,
+        "| Phase | Runs | Balls | Wickets | Run Rate |",
+        "| :--- | ---: | ---: | ---: | ---: |"
+      )
+
+      for (i in seq_len(nrow(phase_stats))) {
+        row <- phase_stats[i, ]
+        lines <- c(
+          lines,
+          paste0(
+            "| ",
+            row$match_phase,
+            " | ",
+            row$runs,
+            " | ",
+            row$balls,
+            " | ",
+            row$wickets,
+            " | ",
+            row$run_rate,
+            " |"
+          )
+        )
+      }
+    }
+
+    return(
+      paste(
+        lines,
+        collapse = "\n"
       )
     )
   }
@@ -1706,11 +2056,38 @@ format_r_result <- function(
 
   if (intent == "head_to_head") {
 
-    if (is.null(result)) {
+    if (
+      is.null(result) ||
+        !is.list(result) ||
+        is.data.frame(result) ||
+        length(result) == 0
+    ) {
 
       return(
         "No head-to-head data was found."
       )
+    }
+
+    required_fields <- c(
+      "team1",
+      "team1_wins",
+      "team2",
+      "team2_wins",
+      "no_result",
+      "total_matches"
+    )
+
+    if (!all(required_fields %in% names(result))) {
+      return("The head-to-head result could not be formatted.")
+    }
+
+    if (
+      length(result$total_matches) != 1 ||
+        is.null(result$total_matches) ||
+        is.na(result$total_matches) ||
+        result$total_matches == 0
+    ) {
+      return("No head-to-head data was found.")
     }
 
     return(
