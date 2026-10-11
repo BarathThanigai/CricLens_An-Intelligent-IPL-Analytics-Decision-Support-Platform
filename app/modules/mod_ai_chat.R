@@ -31,35 +31,76 @@ mod_ai_chat_ui <- function(id) {
 
 mod_ai_chat_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
-    ns <- session$ns
-    query_val <- reactiveVal(NULL)
+    turns <- reactiveVal(list())
+    previous_query <- reactiveVal(NULL)
 
-    observeEvent(input$prompt_btn1, { query_val("Who has the most runs in IPL?") })
-    observeEvent(input$prompt_btn2, { query_val("Who has the most wickets in IPL?") })
-    observeEvent(input$prompt_btn3, { query_val("Which team has the most wins?") })
-    observeEvent(input$prompt_btn4, { query_val("Show V Kohli stats") })
+    submit_query <- function(query) {
+      query <- trimws(as.character(query))
+      if (!length(query) || is.na(query[1]) || !nzchar(query[1])) {
+        return(invisible(NULL))
+      }
+
+      query <- query[1]
+      resolved_query <- resolve_criclens_followup(
+        query,
+        previous_query(),
+        df_feat
+      )
+
+      response <- withProgress(
+        message = "Processing query with R & NVIDIA NIM...",
+        value = 0.5,
+        {
+          process_criclens_query(resolved_query, df_feat)
+        }
+      )
+
+      previous_query(resolved_query)
+      turns(c(
+        turns(),
+        list(list(
+          question = query,
+          response = render_markdown_to_html(response)
+        ))
+      ))
+      invisible(NULL)
+    }
+
+    observeEvent(input$prompt_btn1, {
+      submit_query("Who has the most runs in IPL?")
+    })
+    observeEvent(input$prompt_btn2, {
+      submit_query("Who has the most wickets in IPL?")
+    })
+    observeEvent(input$prompt_btn3, {
+      submit_query("Which team has the most wins?")
+    })
+    observeEvent(input$prompt_btn4, {
+      submit_query("Show V Kohli stats")
+    })
 
     observeEvent(input$submit_btn, {
-      req(input$user_query)
-      query_val(input$user_query)
+      submit_query(input$user_query)
     })
 
     output$chat_response_area <- renderUI({
-      q <- query_val()
-      if (is.null(q) || nchar(q) == 0) {
+      chat_turns <- turns()
+      if (length(chat_turns) == 0) {
         return(div(style = "color: #94a3b8; font-style: italic;", "Type a question or select a prompt chip above to query CricLens AI."))
       }
 
-      withProgress(message = 'Processing query with R & NVIDIA NIM...', value = 0.5, {
-        res_markdown <- process_criclens_query(q, df_feat)
-        res_html <- render_markdown_to_html(res_markdown)
-      })
-
-      div(
-        class = "criclens-card",
-        style = "background-color: #1e2942; border-color: #00d2ff;",
-        HTML(res_html)
-      )
+      tagList(lapply(chat_turns, function(turn) {
+        div(
+          class = "criclens-card",
+          style = "background-color: #1e2942; border-color: #00d2ff;",
+          tags$p(
+            style = "color: #94a3b8;",
+            tags$strong("You: "),
+            htmltools::htmlEscape(turn$question)
+          ),
+          HTML(turn$response)
+        )
+      }))
     })
   })
 }

@@ -122,6 +122,38 @@ predict_live_win_prob <- function(target, current_runs, overs_bowled, wickets_do
     model <- get_win_prob_model()
   }
 
+  if (!inherits(model, "glm") && is.list(model) && "model" %in% names(model)) {
+    model <- model[["model"]]
+  }
+
+  if (
+    !inherits(model, "glm") ||
+      is.null(model$family) ||
+      model$family$family != "binomial"
+  ) {
+    stop(
+      "predict_live_win_prob: expected a fitted binomial glm or a training result list containing one."
+    )
+  }
+
+  required_predictors <- c(
+    "runs_required",
+    "balls_remaining",
+    "wickets_remaining",
+    "req_rr",
+    "current_rr"
+  )
+  model_predictors <- all.vars(
+    stats::delete.response(
+      stats::terms(model)
+    )
+  )
+  if (!all(required_predictors %in% model_predictors)) {
+    stop(
+      "predict_live_win_prob: fitted model is missing one or more live match-state predictors."
+    )
+  }
+
   balls_bowled <- min(120, floor(overs_bowled) * 6 + round((overs_bowled %% 1) * 10))
   balls_remaining <- max(1, 120 - balls_bowled)
   wickets_remaining <- max(0, 10 - wickets_down)

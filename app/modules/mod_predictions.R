@@ -48,7 +48,7 @@ mod_predictions_server <- function(id, win_model) {
         ),
         hr(style = "border-color: #26334d;"),
         h5("Match Context Breakdown", style = "color: #00d2ff; font-weight: 700;"),
-        ul(style = "color: #e2e8f0; font-size: 1.05rem; line-height: 1.8;",
+        tags$ul(style = "color: #e2e8f0; font-size: 1.05rem; line-height: 1.8;",
            tags$li(paste("Runs Required:", res$runs_required, "runs")),
            tags$li(paste("Balls Remaining:", res$balls_remaining, "balls")),
            tags$li(paste("Required Run Rate (RRR):", res$req_rr, "runs/over")),
