@@ -31,13 +31,14 @@ mod_venues_ui <- function(id) {
 mod_venues_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
     observe({
-      v_list <- get_venue_list(df_feat)
-      updateSelectInput(session, "venue_select", choices = v_list$venue, selected = "Eden Gardens")
+      v_list <- get_venue_list(df_feat())
+      selected_venue <- if ("Eden Gardens" %in% v_list$venue) "Eden Gardens" else if (length(v_list$venue)) v_list$venue[1] else character()
+      updateSelectInput(session, "venue_select", choices = v_list$venue, selected = selected_venue)
     })
 
     output$venue_profile_card <- renderUI({
       req(input$venue_select)
-      prof <- get_venue_profile(df_feat, input$venue_select)
+      prof <- get_venue_profile(df_feat(), input$venue_select)
       if (is.null(prof)) return(div("No venue details found."))
 
       tagList(
@@ -53,7 +54,7 @@ mod_venues_server <- function(id, df_feat) {
     })
 
     output$plot_venue_leaderboard <- renderPlotly({
-      v_lead <- get_venue_leaderboard(df_feat, min_matches = 10)
+      v_lead <- get_venue_leaderboard(df_feat(), min_matches = 10)
       plot_venue_scores_chart(v_lead)
     })
   })

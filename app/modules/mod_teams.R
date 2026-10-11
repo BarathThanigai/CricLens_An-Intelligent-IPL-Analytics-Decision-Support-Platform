@@ -35,9 +35,13 @@ mod_teams_ui <- function(id) {
 mod_teams_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
     observe({
-      teams <- sort(unique(c(df_feat$batting_team, df_feat$bowling_team)))
-      updateSelectInput(session, "team1", choices = teams, selected = "Mumbai Indians")
-      updateSelectInput(session, "team2", choices = teams, selected = "Chennai Super Kings")
+      d <- df_feat()
+      teams <- sort(unique(c(d$batting_team, d$bowling_team)))
+      teams <- teams[!is.na(teams) & nzchar(teams)]
+      first_team <- if ("Mumbai Indians" %in% teams) "Mumbai Indians" else if (length(teams)) teams[1] else character()
+      second_team <- if ("Chennai Super Kings" %in% teams) "Chennai Super Kings" else if (length(teams) > 1) teams[2] else first_team
+      updateSelectInput(session, "team1", choices = teams, selected = first_team)
+      updateSelectInput(session, "team2", choices = teams, selected = second_team)
     })
 
     output$h2h_result_card <- renderUI({
@@ -46,7 +50,7 @@ mod_teams_server <- function(id, df_feat) {
         return(div(p(style = "color: #ff5e00;", "Please select two different teams.")))
       }
 
-      h2h <- get_head_to_head(df_feat, input$team1, input$team2)
+      h2h <- get_head_to_head(df_feat(), input$team1, input$team2)
 
       tagList(
         h5(paste(h2h$team1, "vs", h2h$team2), style = "color: #ffffff; font-weight: 700;"),
@@ -57,13 +61,13 @@ mod_teams_server <- function(id, df_feat) {
     })
 
     output$team_summary_table <- renderDT({
-      t_sum <- get_team_performance_summary(df_feat)
-      datatable(t_sum, options = list(pageLength = 8, dom = 't'), rownames = FALSE)
+      t_sum <- get_team_performance_summary(df_feat())
+      datatable(t_sum, options = list(pageLength = 8, dom = 't', scrollX = TRUE, autoWidth = FALSE), rownames = FALSE)
     })
 
     output$bat1st_vs_chasing_table <- renderDT({
-      split_sum <- get_batting_1st_vs_chasing(df_feat)
-      datatable(split_sum, options = list(pageLength = 8, dom = 't'), rownames = FALSE)
+      split_sum <- get_batting_1st_vs_chasing(df_feat())
+      datatable(split_sum, options = list(pageLength = 8, dom = 't', scrollX = TRUE, autoWidth = FALSE), rownames = FALSE)
     })
   })
 }

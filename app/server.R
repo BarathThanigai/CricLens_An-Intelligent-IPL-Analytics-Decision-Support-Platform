@@ -26,6 +26,8 @@ source(get_root_path("R/match_analysis.R"), local = TRUE)
 source(get_root_path("R/venue_analysis.R"), local = TRUE)
 source(get_root_path("R/visualizations.R"), local = TRUE)
 source(get_root_path("R/predictive_models.R"), local = TRUE)
+source(get_root_path("R/data_filters.R"), local = TRUE)
+source(get_root_path("R/data_explorer.R"), local = TRUE)
 source(get_root_path("ai/nim_client.R"), local = TRUE)
 source(get_root_path("ai/prompt_templates.R"), local = TRUE)
 source(get_root_path("ai/query_router.R"), local = TRUE)
@@ -38,22 +40,38 @@ source(get_root_path("app/modules/mod_matches.R"))
 source(get_root_path("app/modules/mod_venues.R"))
 source(get_root_path("app/modules/mod_predictions.R"))
 source(get_root_path("app/modules/mod_ai_chat.R"))
+source(get_root_path("app/modules/mod_player_h2h.R"))
+source(get_root_path("app/modules/mod_data_explorer.R"))
 
 server <- function(input, output, session) {
   # Load pre-processed binary datasets & caches
   df_feat <- readRDS(get_root_path("data/processed/ipl_featured.rds"))
-  batting_summary <- readRDS(get_root_path("data/processed/player_batting_summary.rds"))
-  bowling_summary <- readRDS(get_root_path("data/processed/player_bowling_summary.rds"))
-  team_summary <- readRDS(get_root_path("data/processed/team_summary.rds"))
-  venue_summary <- readRDS(get_root_path("data/processed/venue_summary.rds"))
   win_model <- readRDS(get_root_path("data/processed/win_prob_model.rds"))
 
+  output$global_filter_bar <- renderUI({
+    seasons <- sort(unique(df_feat$season_year[!is.na(df_feat$season_year)]))
+    teams <- sort(unique(c(df_feat$batting_team, df_feat$bowling_team)))
+    teams <- teams[!is.na(teams) & nzchar(teams)]
+    venues <- sort(unique(df_feat$venue[!is.na(df_feat$venue) & nzchar(df_feat$venue)]))
+    div(class = "global-filter-bar",
+      selectInput("global_season", "Season", choices = c("All" = "All", seasons), selected = "All"),
+      selectInput("global_team", "Team", choices = c("All teams" = "All", teams), selected = "All"),
+      selectInput("global_venue", "Venue", choices = c("All venues" = "All", venues), selected = "All")
+    )
+  })
+
+  filtered_data <- reactive({
+    filter_global_data(df_feat, input$global_season, input$global_team, input$global_venue)
+  })
+
   # Wire Module Servers
-  mod_overview_server("overview", df_feat, team_summary, batting_summary)
-  mod_players_server("players", df_feat)
-  mod_teams_server("teams", df_feat)
-  mod_matches_server("matches", df_feat)
-  mod_venues_server("venues", df_feat)
+  mod_overview_server("overview", filtered_data)
+  mod_players_server("players", filtered_data)
+  mod_teams_server("teams", filtered_data)
+  mod_matches_server("matches", filtered_data)
+  mod_venues_server("venues", filtered_data)
+  mod_player_h2h_server("player_h2h", filtered_data)
   mod_predictions_server("predictions", win_model)
-  mod_ai_chat_server("ai_chat", df_feat)
+  mod_data_explorer_server("data_explorer", filtered_data)
+  mod_ai_chat_server("ai_chat", filtered_data)
 }

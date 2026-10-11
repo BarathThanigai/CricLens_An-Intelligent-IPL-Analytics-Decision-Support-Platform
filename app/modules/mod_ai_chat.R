@@ -50,8 +50,12 @@ mod_ai_chat_server <- function(id, df_feat) {
         return(div(style = "color: #94a3b8; font-style: italic;", "Type a question or select a prompt chip above to query CricLens AI."))
       }
 
+      if (!nrow(df_feat())) {
+        return(div(style = "color:#94a3b8;", "No records match the active global filters. Clear a filter to ask about the dataset."))
+      }
+
       withProgress(message = 'Processing query with R & NVIDIA NIM...', value = 0.5, {
-        res_markdown <- process_criclens_query(q, df_feat)
+        res_markdown <- process_criclens_query(q, df_feat())
         res_html <- render_markdown_to_html(res_markdown)
       })
 

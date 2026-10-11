@@ -41,32 +41,38 @@ mod_overview_ui <- function(id) {
   )
 }
 
-mod_overview_server <- function(id, df_feat, team_summary, batting_summary) {
+mod_overview_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
     # Dynamic KPI Calculations
     output$kpi_matches <- renderText({
-      format(length(unique(df_feat$match_id)), big.mark = ",")
+      d <- df_feat()
+      format(length(unique(d$match_id)), big.mark = ",")
     })
 
     output$kpi_runs <- renderText({
-      format(sum(df_feat$runs_total, na.rm = TRUE), big.mark = ",")
+      d <- df_feat()
+      format(sum(d$runs_total, na.rm = TRUE), big.mark = ",")
     })
 
     output$kpi_wickets <- renderText({
-      format(sum(df_feat$is_wicket, na.rm = TRUE), big.mark = ",")
+      d <- df_feat()
+      format(sum(d$is_wicket, na.rm = TRUE), big.mark = ",")
     })
 
     output$kpi_seasons <- renderText({
-      seasons <- sort(unique(df_feat$season_year))
+      d <- df_feat()
+      seasons <- sort(unique(d$season_year))
+      seasons <- seasons[!is.na(seasons)]
+      if (!length(seasons)) return("0")
       paste0(length(seasons), " (", min(seasons), "-", max(seasons), ")")
     })
 
     output$plot_team_overview <- renderPlotly({
-      plot_team_wins_chart(team_summary %>% head(8), title = "Top Franchises by Match Victories")
+      plot_team_wins_chart(get_team_performance_summary(df_feat()) %>% head(8), title = "Top Franchises by Match Victories")
     })
 
     output$plot_top_batters <- renderPlotly({
-      plot_top_batters_chart(batting_summary %>% head(8), title = "Top IPL Run Scorers")
+      plot_top_batters_chart(get_top_batters(df_feat(), top_n = 8), title = "Top IPL Run Scorers")
     })
   })
 }

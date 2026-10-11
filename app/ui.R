@@ -27,6 +27,8 @@ source(get_root_path("app/modules/mod_matches.R"))
 source(get_root_path("app/modules/mod_venues.R"))
 source(get_root_path("app/modules/mod_predictions.R"))
 source(get_root_path("app/modules/mod_ai_chat.R"))
+source(get_root_path("app/modules/mod_player_h2h.R"))
+source(get_root_path("app/modules/mod_data_explorer.R"))
 
 ui <- page_navbar(
   title = span(
@@ -40,14 +42,17 @@ ui <- page_navbar(
     bg = "#0b0f19",
     fg = "#f8fafc"
   ),
-  header = tags$head(
-    tags$link(rel = "stylesheet", type = "text/css", href = "custom.css")
+  header = tagList(
+    tags$head(tags$link(rel = "stylesheet", type = "text/css", href = "custom.css")),
+    div(class = "global-filter-shell", uiOutput("global_filter_bar"))
   ),
   nav_panel("🏠 Overview", mod_overview_ui("overview")),
   nav_panel("🏏 Players", mod_players_ui("players")),
   nav_panel("🏆 Teams", mod_teams_ui("teams")),
   nav_panel("🏟️ Matches", mod_matches_ui("matches")),
   nav_panel("📊 Venues", mod_venues_ui("venues")),
+  nav_panel("🤝 Player H2H", mod_player_h2h_ui("player_h2h")),
   nav_panel("⚡ Predictions", mod_predictions_ui("predictions")),
+  nav_panel("🧭 Data Explorer", mod_data_explorer_ui("data_explorer")),
   nav_panel("🤖 Ask CricLens", mod_ai_chat_ui("ai_chat"))
 )
