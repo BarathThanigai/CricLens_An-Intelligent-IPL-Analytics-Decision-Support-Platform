@@ -152,9 +152,10 @@ clean_ipl_data <- function(raw_path = "data/raw/IPL.csv") {
     fill_missing_city() %>%
     # Wicket categorization flags
     mutate(
-      is_wicket = !is.na(wicket_kind),
-      is_bowler_wicket = is_wicket & (wicket_kind %in% c("bowled", "caught", "caught and bowled", "lbw", "stumped", "hit wicket")),
-      is_run_out = is_wicket & (wicket_kind == "run out")
+      wicket_kind_normalized = tolower(trimws(as.character(wicket_kind))),
+      is_wicket = !is.na(wicket_kind) & wicket_kind_normalized != "" & wicket_kind_normalized != "retired hurt",
+      is_bowler_wicket = is_wicket & (wicket_kind_normalized %in% c("bowled", "caught", "caught and bowled", "lbw", "stumped", "hit wicket")),
+      is_run_out = is_wicket & (wicket_kind_normalized == "run out")
     ) %>%
     # Ensure date is Date type
     mutate(date = as.Date(date)) %>%
