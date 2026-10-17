@@ -50,4 +50,3 @@ ui <- page_navbar(
   nav_panel(tagList(cl_icon("explorer"), "Data Explorer"), value = "data_explorer", mod_data_explorer_ui("data_explorer")),
   nav_panel(tagList(cl_icon("ai"), "Ask CricLens"), value = "ai_chat", mod_ai_chat_ui("ai_chat"))
 )
-
