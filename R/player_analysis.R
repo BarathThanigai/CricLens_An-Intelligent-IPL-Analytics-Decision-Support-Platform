@@ -502,3 +502,132 @@ get_head_to_head_player <- function(
 
   return(matchup)
 }
+
+
+#' Score a player's batting and/or bowling impact within the supplied cohort.
+#' The score is a relative index (50 = cohort average), not an official rating.
+get_player_impact_scores <- function(df, batting_weight = 0.6, bowling_weight = 0.4,
+                                     min_batting_balls = 30, min_bowling_balls = 12) {
+  batting_weight <- max(0, min(1, as.numeric(batting_weight)))
+  bowling_weight <- max(0, min(1, as.numeric(bowling_weight)))
+  if (batting_weight + bowling_weight <= 0) {
+    return(data.frame(player = character(), impact = numeric(), role = character(),
+                      batting_component = numeric(), bowling_component = numeric(),
+                      batting_balls = integer(), bowling_balls = integer()))
+  }
+
+  d <- df %>% filter(innings %in% c(1, 2))
+  bat <- d %>% group_by(player = batter) %>% summarise(
+    batting_balls = sum(balls_faced == 1, na.rm = TRUE),
+    runs = sum(runs_batter, na.rm = TRUE),
+    outs = sum(player_out == first(player), na.rm = TRUE),
+    average = ifelse(outs > 0, runs / outs, NA_real_),
+    strike_rate = ifelse(batting_balls > 0, 100 * runs / batting_balls, NA_real_),
+    .groups = "drop"
+  ) %>% filter(!is.na(player), player != "", batting_balls >= min_batting_balls)
+
+  bowl <- d %>% group_by(player = bowler) %>% summarise(
+    bowling_balls = sum(valid_ball == 1, na.rm = TRUE),
+    runs_conceded = sum(runs_bowler, na.rm = TRUE),
+    wickets = sum(is_bowler_wicket, na.rm = TRUE),
+    economy = ifelse(bowling_balls > 0, 6 * runs_conceded / bowling_balls, NA_real_),
+    wicket_rate = ifelse(bowling_balls > 0, 6 * wickets / bowling_balls, NA_real_),
+    .groups = "drop"
+  ) %>% filter(!is.na(player), player != "", bowling_balls >= min_bowling_balls)
+
+  z <- function(x, reverse = FALSE) {
+    if (reverse) x <- -x
+    s <- stats::sd(x, na.rm = TRUE)
+    if (!is.finite(s) || s == 0) return(rep(0, length(x)))
+    as.numeric((x - mean(x, na.rm = TRUE)) / s)
+  }
+  if (nrow(bat) >= 2) {
+    bat$batting_component <- rowMeans(cbind(z(bat$average), z(bat$strike_rate)), na.rm = TRUE)
+    bat$batting_component[!is.finite(bat$batting_component)] <- NA_real_
+    bat$batting_component <- bat$batting_component * pmin(1, sqrt(bat$batting_balls / 120))
+  } else bat$batting_component <- NA_real_
+  if (nrow(bowl) >= 2) {
+    bowl$bowling_component <- rowMeans(cbind(z(bowl$wicket_rate), z(bowl$economy, reverse = TRUE)), na.rm = TRUE)
+    bowl$bowling_component[!is.finite(bowl$bowling_component)] <- NA_real_
+    bowl$bowling_component <- bowl$bowling_component * pmin(1, sqrt(bowl$bowling_balls / 48))
+  } else bowl$bowling_component <- NA_real_
+
+  players <- sort(unique(c(bat$player, bowl$player)))
+  out <- data.frame(player = players, stringsAsFactors = FALSE) %>%
+    left_join(bat %>% select(player, batting_balls, batting_component), by = "player") %>%
+    left_join(bowl %>% select(player, bowling_balls, bowling_component), by = "player") %>%
+    mutate(
+      has_bat = !is.na(batting_component), has_bowl = !is.na(bowling_component),
+      used_bat_weight = ifelse(has_bat, batting_weight, 0),
+      used_bowl_weight = ifelse(has_bowl, bowling_weight, 0),
+      weight_total = used_bat_weight + used_bowl_weight,
+      impact = ifelse(weight_total > 0,
+                      50 + 10 * (coalesce(batting_component, 0) * used_bat_weight +
+                                   coalesce(bowling_component, 0) * used_bowl_weight) / weight_total,
+                      NA_real_),
+      impact = pmax(0, pmin(100, impact)),
+      role = case_when(has_bat & has_bowl ~ "All-rounder", has_bat ~ "Batter",
+                       has_bowl ~ "Bowler", TRUE ~ "Insufficient sample")
+    ) %>% select(player, role, impact, batting_component, bowling_component,
+                 batting_balls, bowling_balls)
+  out
+}
+
+weight_player_impact_scores <- function(scores, batting_weight = 0.6, bowling_weight = 0.4) {
+  if (!nrow(scores)) return(scores)
+  batting_weight <- max(0, min(1, as.numeric(batting_weight)))
+  bowling_weight <- max(0, min(1, as.numeric(bowling_weight)))
+  has_bat <- !is.na(scores$batting_component)
+  has_bowl <- !is.na(scores$bowling_component)
+  wb <- ifelse(has_bat, batting_weight, 0)
+  ww <- ifelse(has_bowl, bowling_weight, 0)
+  total <- wb + ww
+  component <- (ifelse(has_bat, scores$batting_component, 0) * wb +
+                  ifelse(has_bowl, scores$bowling_component, 0) * ww) / ifelse(total > 0, total, NA_real_)
+  scores$impact <- pmax(0, pmin(100, 50 + 10 * component))
+  scores$impact[total <= 0] <- NA_real_
+  scores
+}
+
+
+#' Return role-appropriate profile rows for two players for a H2H comparison.
+get_player_role_profiles <- function(df, player_names, venue = NULL) {
+  d <- df %>% filter(innings %in% c(1, 2))
+  if (!is.null(venue) && length(venue) == 1 && !is.na(venue) && nzchar(venue)) {
+    d <- d %>% filter(.data$venue == venue)
+  }
+  profiles <- list()
+  for (p in unique(player_names)) {
+    b <- d %>% filter(batter == p)
+    if (sum(b$balls_faced == 1, na.rm = TRUE) > 0) {
+      runs <- sum(b$runs_batter, na.rm = TRUE)
+      balls <- sum(b$balls_faced == 1, na.rm = TRUE)
+      outs <- sum(d$player_out == p, na.rm = TRUE)
+      profiles[[length(profiles) + 1L]] <- data.frame(
+        player = p, role = "Batting", matches = dplyr::n_distinct(b$match_id),
+        innings = dplyr::n_distinct(paste(b$match_id, b$innings)), balls = balls,
+        runs_or_conceded = runs, wickets = NA_integer_,
+        average = if (outs > 0) runs / outs else NA_real_,
+        rate = if (balls > 0) 100 * runs / balls else NA_real_,
+        fours = sum(b$is_four, na.rm = TRUE), sixes = sum(b$is_six, na.rm = TRUE),
+        boundary_pct = if (balls > 0) 100 * (sum(b$is_four, na.rm = TRUE) + sum(b$is_six, na.rm = TRUE)) / balls else NA_real_,
+        stringsAsFactors = FALSE)
+    }
+    w <- d %>% filter(bowler == p)
+    balls <- sum(w$valid_ball == 1, na.rm = TRUE)
+    wickets <- sum(w$is_bowler_wicket, na.rm = TRUE)
+    if (balls > 0) {
+      conceded <- sum(w$runs_bowler, na.rm = TRUE)
+      profiles[[length(profiles) + 1L]] <- data.frame(
+        player = p, role = "Bowling", matches = dplyr::n_distinct(w$match_id),
+        innings = dplyr::n_distinct(paste(w$match_id, w$innings)), balls = balls,
+        runs_or_conceded = conceded, wickets = wickets,
+        average = if (wickets > 0) conceded / wickets else NA_real_,
+        rate = 6 * conceded / balls, fours = NA_integer_, sixes = NA_integer_,
+        boundary_pct = if (wickets > 0) balls / wickets else NA_real_,
+        stringsAsFactors = FALSE)
+    }
+  }
+  if (!length(profiles)) return(data.frame())
+  do.call(rbind, profiles)
+}

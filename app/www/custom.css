@@ -114,3 +114,60 @@ table.dataTable th {
 table.dataTable td {
   border-bottom: 1px solid var(--border-color) !important;
 }
+/* Keep wide analytical content inside its cards and let tables scroll locally. */
+.criclens-card,
+.analytics-table-card,
+.global-filter-shell {
+  min-width: 0;
+}
+
+.criclens-card {
+  overflow: hidden;
+}
+
+.criclens-card .html-widget,
+.criclens-card .plotly,
+.criclens-card .datatables,
+.criclens-card .dataTables_wrapper {
+  max-width: 100% !important;
+  min-width: 0;
+}
+
+.criclens-card .dataTables_wrapper {
+  overflow-x: auto;
+}
+
+.criclens-card table.dataTable {
+  width: 100% !important;
+  white-space: nowrap;
+}
+
+.global-filter-shell {
+  padding: 0.75rem clamp(1rem, 3vw, 2.5rem);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+
+.global-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  gap: 1rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.global-filter-bar .form-group {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .global-filter-bar {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .criclens-card {
+    padding: 14px;
+  }
+}

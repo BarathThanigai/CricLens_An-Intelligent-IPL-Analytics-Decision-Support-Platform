@@ -52,7 +52,7 @@ mod_matches_ui <- function(id) {
 mod_matches_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
     observe({
-      m_list <- get_match_list(df_feat, season_filter = input$season_filter)
+      m_list <- get_match_list(df_feat(), season_filter = input$season_filter)
       choices_vec <- m_list$match_id
       names(choices_vec) <- m_list$label
       updateSelectInput(session, "match_select", choices = choices_vec, selected = choices_vec[1])
@@ -60,7 +60,7 @@ mod_matches_server <- function(id, df_feat) {
 
     output$match_header_card <- renderUI({
       req(input$match_select)
-      m_info <- get_match_summary_info(df_feat, as.numeric(input$match_select))
+      m_info <- get_match_summary_info(df_feat(), as.numeric(input$match_select))
       if (is.null(m_info)) return(div("No match details found."))
 
       tagList(
@@ -81,28 +81,28 @@ mod_matches_server <- function(id, df_feat) {
 
     output$plot_worm <- renderPlotly({
       req(input$match_select)
-      w_data <- get_match_worm_data(df_feat, as.numeric(input$match_select))
+      w_data <- get_match_worm_data(df_feat(), as.numeric(input$match_select))
       plot_match_worm_chart(w_data)
     })
 
     output$plot_manhattan <- renderPlotly({
       req(input$match_select)
-      m_data <- get_match_manhattan_data(df_feat, as.numeric(input$match_select))
+      m_data <- get_match_manhattan_data(df_feat(), as.numeric(input$match_select))
       plot_match_manhattan_chart(m_data)
     })
 
     output$batting_scorecard_table <- renderDT({
       req(input$match_select)
-      sc <- get_match_scorecard(df_feat, as.numeric(input$match_select))
+      sc <- get_match_scorecard(df_feat(), as.numeric(input$match_select))
       datatable(sc$batting %>% select(batting_team, batter, runs, balls, strike_rate, dismissal),
-                options = list(pageLength = 8, dom = 't'), rownames = FALSE)
+                options = list(pageLength = 8, dom = 't', scrollX = TRUE, autoWidth = FALSE), rownames = FALSE)
     })
 
     output$bowling_scorecard_table <- renderDT({
       req(input$match_select)
-      sc <- get_match_scorecard(df_feat, as.numeric(input$match_select))
+      sc <- get_match_scorecard(df_feat(), as.numeric(input$match_select))
       datatable(sc$bowling %>% select(bowling_team, bowler, overs, runs_given, wickets, economy),
-                options = list(pageLength = 8, dom = 't'), rownames = FALSE)
+                options = list(pageLength = 8, dom = 't', scrollX = TRUE, autoWidth = FALSE), rownames = FALSE)
     })
   })
 }

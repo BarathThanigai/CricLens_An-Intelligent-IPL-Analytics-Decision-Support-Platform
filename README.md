@@ -27,6 +27,13 @@ CricLens is a professional data analytics platform built using **R (v4.6.1)** as
    - Custom `bslib` layout with deep navy background (`#0B0F19`), IPL accent cyan (`#00D2FF`), electric orange (`#FF5E00`), and gold (`#FFD700`).
    - Interactive `Plotly` analytical charts & responsive `DT` data tables.
 
+5. **Filterable Player and Data Analysis**
+   - Shared season, team, and venue filters update relevant analytical pages.
+   - Player impact scores combine sample-qualified batting and bowling components and recalculate as filters or weights change.
+   - Player head-to-head views show role-supported batting and bowling profiles separately.
+   - Data Explorer combines global search, category, text, numeric, and date filters. Its CSV export contains every matching row.
+   - Wide tables scroll inside their cards, with responsive layout behavior for smaller screens.
+
 ---
 
 ## Core Architecture
@@ -87,7 +94,9 @@ CricLens/
 │       ├── mod_matches.R            # Ball-by-ball match explorer
 │       ├── mod_venues.R             # Stadium analytics & pitch explorer
 │       ├── mod_predictions.R        # Live Win Predictor tool
-│       └── mod_ai_chat.R            # Ask CricLens AI interface
+│       ├── mod_ai_chat.R            # Ask CricLens AI interface
+│       ├── mod_player_h2h.R         # Role-aware player comparison
+│       └── mod_data_explorer.R      # Filterable dataset explorer
 │
 ├── ai/
 │   ├── nim_client.R                 # NVIDIA NIM REST client
