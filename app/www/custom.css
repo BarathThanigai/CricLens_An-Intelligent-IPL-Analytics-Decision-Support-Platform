@@ -122,7 +122,8 @@ table.dataTable td {
 }
 
 .criclens-card {
-  overflow: hidden;
+  /* Selectize menus must be allowed to extend beyond the card while open. */
+  overflow: visible;
 }
 
 .criclens-card .html-widget,

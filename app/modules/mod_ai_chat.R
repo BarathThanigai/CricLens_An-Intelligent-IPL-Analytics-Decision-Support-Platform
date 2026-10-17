@@ -11,13 +11,13 @@ mod_ai_chat_ui <- function(id) {
     fluidRow(
       column(12,
              div(class = "criclens-card",
-                 h3("🤖 Ask CricLens — Conversational Sports Analytics Interface", style = "color: #00d2ff; font-weight: 800;"),
-                 p(style = "color: #94a3b8;", "Ask natural language questions about IPL players, teams, matches, or venues. Powered by R Analytics & NVIDIA NIM API."),
+                 h3(tagList(cl_icon("ai"), "Ask CricLens — Conversational Sports Analytics Interface"), style = "color: #00d2ff; font-weight: 800;"),
+                 p(style = "color: #526176;", "Ask natural language questions about IPL players, teams, matches, or venues. Powered by R Analytics & NVIDIA NIM API."),
                  div(style = "margin-bottom: 15px;",
-                     actionButton(ns("prompt_btn1"), "🏏 Who has the most runs in IPL?", class = "btn btn-outline-info btn-sm", style = "margin-right: 5px;"),
-                     actionButton(ns("prompt_btn2"), "🎯 Who has the most wickets in IPL?", class = "btn btn-outline-warning btn-sm", style = "margin-right: 5px;"),
-                     actionButton(ns("prompt_btn3"), "🏆 Which team has the most wins?", class = "btn btn-outline-success btn-sm", style = "margin-right: 5px;"),
-                     actionButton(ns("prompt_btn4"), "📊 Show V Kohli stats", class = "btn btn-outline-primary btn-sm")
+                     actionButton(ns("prompt_btn1"), tagList(cl_icon("bat"), "Who has the most runs in IPL?"), class = "btn btn-outline-info btn-sm", style = "margin-right: 5px;"),
+                     actionButton(ns("prompt_btn2"), tagList(cl_icon("bowl"), "Who has the most wickets in IPL?"), class = "btn btn-outline-warning btn-sm", style = "margin-right: 5px;"),
+                     actionButton(ns("prompt_btn3"), tagList(cl_icon("trophy"), "Which team has the most wins?"), class = "btn btn-outline-success btn-sm", style = "margin-right: 5px;"),
+                     actionButton(ns("prompt_btn4"), tagList(cl_icon("chart"), "Show V Kohli stats"), class = "btn btn-outline-primary btn-sm")
                  ),
                  textInput(ns("user_query"), "Your Question:", placeholder = "e.g., Who has the highest strike rate?", width = "100%"),
                  actionButton(ns("submit_btn"), "Ask CricLens AI", class = "btn btn-primary", style = "margin-top: 10px;"),
@@ -92,9 +92,9 @@ mod_ai_chat_server <- function(id, df_feat) {
       tagList(lapply(chat_turns, function(turn) {
         div(
           class = "criclens-card",
-          style = "background-color: #1e2942; border-color: #00d2ff;",
+          style = "background-color: #fff; border-color: #dce4ee;",
           tags$p(
-            style = "color: #94a3b8;",
+            style = "color: #526176;",
             tags$strong("You: "),
             htmltools::htmlEscape(turn$question)
           ),
