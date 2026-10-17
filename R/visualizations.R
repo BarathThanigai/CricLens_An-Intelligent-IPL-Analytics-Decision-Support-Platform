@@ -16,22 +16,22 @@ suppressMessages({
 # CRICLENS VISUAL THEME
 # =========================================================
 
-CRICLENS_BG <- "#0B0F19"
-CRICLENS_CARD_BG <- "#161F33"
-CRICLENS_TEXT <- "#E2E8F0"
-CRICLENS_CYAN <- "#00D2FF"
-CRICLENS_ORANGE <- "#FF5E00"
-CRICLENS_GOLD <- "#FFD700"
-CRICLENS_PURPLE <- "#9D4EDD"
-CRICLENS_GRID <- "#2D3748"
+CRICLENS_BG <- "#F4F7FB"
+CRICLENS_CARD_BG <- "#FFFFFF"
+CRICLENS_TEXT <- "#17243A"
+CRICLENS_CYAN <- "#087E8B"
+CRICLENS_ORANGE <- "#C85B21"
+CRICLENS_GOLD <- "#B08300"
+CRICLENS_PURPLE <- "#7052A3"
+CRICLENS_GRID <- "#E8EDF3"
 
 
 # =========================================================
 # COMMON PLOTLY LAYOUT
 # =========================================================
 
-#' Apply CricLens dark Plotly layout
-apply_dark_plotly_layout <- function(
+#' Apply the shared light CricLens Plotly layout
+apply_criclens_plotly_layout <- function(
     p,
     title_text = "",
     x_title = "",
@@ -41,46 +41,17 @@ apply_dark_plotly_layout <- function(
   p %>%
     layout(
 
-      title = list(
-        text = paste0(
-          "<b>",
-          title_text,
-          "</b>"
-        ),
-        font = list(
-          color = "#FFFFFF",
-          size = 18
-        )
-      ),
-
-      paper_bgcolor =
-        CRICLENS_CARD_BG,
-
-      plot_bgcolor =
-        CRICLENS_CARD_BG,
-
-      font = list(
-        color = CRICLENS_TEXT,
-        family = "Inter, sans-serif"
-      ),
-
-      xaxis = list(
-        title = x_title,
-        gridcolor = CRICLENS_GRID,
-        zerolinecolor = CRICLENS_GRID,
-        tickfont = list(
-          color = CRICLENS_TEXT
-        )
-      ),
-
-      yaxis = list(
-        title = y_title,
-        gridcolor = CRICLENS_GRID,
-        zerolinecolor = CRICLENS_GRID,
-        tickfont = list(
-          color = CRICLENS_TEXT
-        )
-      ),
+      title = list(text = paste0("<b>", title_text, "</b>"),
+                   font = list(color = CRICLENS_TEXT, size = 18, family = "Manrope, sans-serif")),
+      paper_bgcolor = CRICLENS_CARD_BG,
+      plot_bgcolor = CRICLENS_CARD_BG,
+      font = list(color = CRICLENS_TEXT, family = "DM Sans, sans-serif", size = 14),
+      xaxis = list(title = list(text = x_title, font = list(color = "#526176", size = 14)),
+                   gridcolor = CRICLENS_GRID, zeroline = FALSE,
+                   tickfont = list(color = "#526176", size = 13), automargin = TRUE),
+      yaxis = list(title = list(text = y_title, font = list(color = "#526176", size = 14)),
+                   gridcolor = CRICLENS_GRID, zeroline = FALSE,
+                   tickfont = list(color = CRICLENS_TEXT, size = 13), automargin = TRUE),
 
       margin = list(
         l = 50,
@@ -89,11 +60,9 @@ apply_dark_plotly_layout <- function(
         b = 50
       ),
 
-      legend = list(
-        font = list(
-          color = CRICLENS_TEXT
-        )
-      )
+      legend = list(font = list(color = CRICLENS_TEXT, size = 13)),
+      hoverlabel = list(bgcolor = "#FFFFFF", bordercolor = "#DCE4EE",
+                        font = list(color = CRICLENS_TEXT, family = "DM Sans, sans-serif"))
     )
 }
 
@@ -169,7 +138,7 @@ plot_top_batters_chart <- function(
     hoverinfo = "text"
   )
 
-  apply_dark_plotly_layout(
+  apply_criclens_plotly_layout(
     p,
     title_text = title,
     x_title = "Total Runs",
@@ -249,7 +218,7 @@ plot_top_bowlers_chart <- function(
     hoverinfo = "text"
   )
 
-  apply_dark_plotly_layout(
+  apply_criclens_plotly_layout(
     p,
     title_text = title,
     x_title = "Total Wickets",
@@ -399,7 +368,7 @@ plot_match_worm_chart <- function(
   }
 
 
-  apply_dark_plotly_layout(
+  apply_criclens_plotly_layout(
     p,
     title_text = title,
     x_title = "Over",
@@ -476,7 +445,7 @@ plot_match_manhattan_chart <- function(
     hoverinfo = "text"
   )
 
-  apply_dark_plotly_layout(
+  apply_criclens_plotly_layout(
     p,
     title_text = title,
     x_title = "Over Number",
@@ -578,7 +547,7 @@ plot_team_wins_chart <- function(
     hoverinfo = "text"
   )
 
-  apply_dark_plotly_layout(
+  apply_criclens_plotly_layout(
     p,
     title_text = title,
     x_title = "Total Wins",
@@ -689,7 +658,7 @@ plot_venue_scores_chart <- function(
     hoverinfo = "text"
   )
 
-  apply_dark_plotly_layout(
+  apply_criclens_plotly_layout(
     p,
     title_text = title,
     x_title = "Average 1st Innings Score",

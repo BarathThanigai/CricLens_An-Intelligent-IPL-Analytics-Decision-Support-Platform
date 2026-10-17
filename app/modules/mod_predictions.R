@@ -7,7 +7,7 @@ mod_predictions_ui <- function(id) {
     fluidRow(
       column(5,
              div(class = "criclens-card",
-                 h4("⚡ Live Match State Simulator", style = "color: #00d2ff; font-weight: 700;"),
+                 h4(tagList(cl_icon("predictions"), "Live Match State Simulator"), style = "color: #00d2ff; font-weight: 700;"),
                  numericInput(ns("target"), "Target Score (Innings 2 Target):", value = 180, min = 50, max = 300),
                  sliderInput(ns("current_runs"), "Current Runs Scored:", min = 0, max = 280, value = 110, step = 1),
                  sliderInput(ns("overs_bowled"), "Overs Completed (0.1 - 19.5):", min = 1, max = 19.5, value = 12, step = 0.5),
@@ -16,7 +16,7 @@ mod_predictions_ui <- function(id) {
       ),
       column(7,
              div(class = "criclens-card",
-                 h4("🤖 Machine Learning Win Probability Model", style = "color: #ffd700; font-weight: 700;"),
+                 h4(tagList(cl_icon("ai"), "Machine Learning Win Probability Model"), style = "color: #ffd700; font-weight: 700;"),
                  uiOutput(ns("win_prob_results_card"))
              )
       )
@@ -48,7 +48,7 @@ mod_predictions_server <- function(id, win_model) {
         ),
         hr(style = "border-color: #26334d;"),
         h5("Match Context Breakdown", style = "color: #00d2ff; font-weight: 700;"),
-        tags$ul(style = "color: #e2e8f0; font-size: 1.05rem; line-height: 1.8;",
+        ul(style = "color: #e2e8f0; font-size: 1.05rem; line-height: 1.8;",
            tags$li(paste("Runs Required:", res$runs_required, "runs")),
            tags$li(paste("Balls Remaining:", res$balls_remaining, "balls")),
            tags$li(paste("Required Run Rate (RRR):", res$req_rr, "runs/over")),

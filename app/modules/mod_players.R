@@ -7,7 +7,7 @@ mod_players_ui <- function(id) {
     fluidRow(
       column(4,
              div(class = "criclens-card",
-                 h4("🔍 Player Filter Controls", style = "color: #00d2ff; font-weight: 700;"),
+                 h4(tagList(cl_icon("filter"), "Player Filter Controls"), style = "color: #00d2ff; font-weight: 700;"),
                  selectInput(ns("season_select"), "Select Season:",
                              choices = c("All", 2008:2026), selected = "All"),
                  numericInput(ns("top_n"), "Show Top N Players:", value = 10, min = 5, max = 25),
@@ -24,27 +24,27 @@ mod_players_ui <- function(id) {
     fluidRow(
       column(6,
              div(class = "criclens-card",
-                 h4("🏏 Top Batting Performers", style = "color: #00d2ff; font-weight: 700;"),
-                 plotlyOutput(ns("plot_batters"), height = "400px")
+                 h4(tagList(cl_icon("bat"), "Top Batting Performers"), style = "color: #00d2ff; font-weight: 700;"),
+                 uiOutput(ns("plot_batters_ui"))
              )
       ),
       column(6,
              div(class = "criclens-card",
-                 h4("🎯 Top Bowling Performers", style = "color: #ff5e00; font-weight: 700;"),
-                 plotlyOutput(ns("plot_bowlers"), height = "400px")
+                 h4(tagList(cl_icon("bowl"), "Top Bowling Performers"), style = "color: #ff5e00; font-weight: 700;"),
+                 uiOutput(ns("plot_bowlers_ui"))
              )
       )
     ),
     fluidRow(
       column(6,
              div(class = "criclens-card analytics-table-card",
-                 h4("🎯 Selected Player Bowling Profile", style = "color: #ff5e00; font-weight: 700;"),
+                 h4(tagList(cl_icon("bowl"), "Selected Player Bowling Profile"), style = "color: #ff5e00; font-weight: 700;"),
                  DTOutput(ns("bowling_profile_table"))
              )
       ),
       column(6,
              div(class = "criclens-card analytics-table-card",
-                 h4("⚖️ Custom Impact Score", style = "color: #00d2ff; font-weight: 700;"),
+                 h4(tagList(cl_icon("scale"), "Custom Impact Score"), style = "color: #00d2ff; font-weight: 700;"),
                  sliderInput(ns("bat_weight"), "Impact score batting weight", min = 0, max = 1, value = 0.6, step = 0.1),
                  sliderInput(ns("bowl_weight"), "Impact score bowling weight", min = 0, max = 1, value = 0.4, step = 0.1),
                  textOutput(ns("impact_explanation")),
@@ -99,14 +99,45 @@ mod_players_server <- function(id, df_feat) {
       )
     })
 
+    output$plot_batters_ui <- renderUI({
+      rows <- suppressWarnings(as.integer(input$top_n))
+      if (!length(rows) || is.na(rows)) rows <- 10L
+      rows <- min(max(rows, 5L), 25L)
+      plotlyOutput(session$ns("plot_batters"), height = paste0(cl_plot_height(rows, 34, 110, 320), "px"))
+    })
+
+    output$plot_bowlers_ui <- renderUI({
+      rows <- suppressWarnings(as.integer(input$top_n))
+      if (!length(rows) || is.na(rows)) rows <- 10L
+      rows <- min(max(rows, 5L), 25L)
+      plotlyOutput(session$ns("plot_bowlers"), height = paste0(cl_plot_height(rows, 34, 110, 320), "px"))
+    })
+
     output$plot_batters <- renderPlotly({
       top_b <- get_top_batters(player_data(), top_n = input$top_n)
-      plot_top_batters_chart(top_b)
+      cl_leaderboard_chart(
+        top_b,
+        label = "batter",
+        value = "total_runs",
+        value_name = "Total runs",
+        details = c(Avg = "average", SR = "strike_rate"),
+        top_n = input$top_n,
+        selected = input$search_player
+      )
     })
 
     output$plot_bowlers <- renderPlotly({
       top_bw <- get_top_bowlers(player_data(), top_n = input$top_n)
-      plot_top_bowlers_chart(top_bw)
+      cl_leaderboard_chart(
+        top_bw,
+        label = "bowler",
+        value = "wickets",
+        value_name = "Total wickets",
+        details = c(Econ = "economy", Avg = "average"),
+        color = cl_colors[["orange"]],
+        top_n = input$top_n,
+        selected = input$search_player
+      )
     })
 
     output$bowling_profile_table <- renderDT({
