@@ -8,49 +8,45 @@ suppressMessages({
   library(DT)
 })
 
-app_dir <- getOption("criclens.app_dir")
-if (is.null(app_dir) || !file.exists(file.path(app_dir, "modules", "mod_overview.R"))) {
-  app_candidates <- normalizePath(
-    c(getwd(), dirname(getwd())),
-    winslash = "/",
-    mustWork = FALSE
-  )
-  app_dir <- app_candidates[
-    file.exists(file.path(app_candidates, "modules", "mod_overview.R"))
-  ][1]
-}
-if (is.na(app_dir) || !length(app_dir)) {
-  stop("Unable to locate the CricLens app modules.")
+# Robust path helper for root vs app directory execution
+get_root_path <- function(rel_path) {
+  if (file.exists(rel_path)) {
+    return(rel_path)
+  } else if (file.exists(file.path("..", rel_path))) {
+    return(file.path("..", rel_path))
+  } else {
+    return(rel_path)
+  }
 }
 
-source(file.path(app_dir, "modules", "mod_overview.R"), local = TRUE)
-source(file.path(app_dir, "modules", "mod_players.R"), local = TRUE)
-source(file.path(app_dir, "modules", "mod_teams.R"), local = TRUE)
-source(file.path(app_dir, "modules", "mod_matches.R"), local = TRUE)
-source(file.path(app_dir, "modules", "mod_venues.R"), local = TRUE)
-source(file.path(app_dir, "modules", "mod_predictions.R"), local = TRUE)
-source(file.path(app_dir, "modules", "mod_ai_chat.R"), local = TRUE)
+# Shared visual helpers from the presentation layer.
+source(get_root_path("R/criclens_ui.R"), local = .GlobalEnv)
+source(get_root_path("R/criclens_charts.R"), local = .GlobalEnv)
+
+# Source module UI definitions
+source(get_root_path("app/modules/mod_overview.R"))
+source(get_root_path("app/modules/mod_players.R"))
+source(get_root_path("app/modules/mod_teams.R"))
+source(get_root_path("app/modules/mod_matches.R"))
+source(get_root_path("app/modules/mod_venues.R"))
+source(get_root_path("app/modules/mod_predictions.R"))
+source(get_root_path("app/modules/mod_ai_chat.R"))
+source(get_root_path("app/modules/mod_player_h2h.R"))
+source(get_root_path("app/modules/mod_data_explorer.R"))
 
 ui <- page_navbar(
-  title = span(
-    "CricLens", style = "font-family: 'Outfit', sans-serif; font-weight: 800; color: #00d2ff;"
+  title = cl_brand("CricLens", "IPL Analytics"),
+  theme = criclens_theme(),
+  header = tagList(
+    tags$head(tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"), tags$link(rel = "stylesheet", type = "text/css", href = "criclens.css"), tags$script(src = "criclens.js"))
   ),
-  theme = bs_theme(
-    version = 5,
-    bootswatch = "darkly",
-    primary = "#00d2ff",
-    secondary = "#ff5e00",
-    bg = "#0b0f19",
-    fg = "#f8fafc"
-  ),
-  header = tags$head(
-    tags$link(rel = "stylesheet", type = "text/css", href = "custom.css")
-  ),
-  nav_panel("🏠 Overview", mod_overview_ui("overview")),
-  nav_panel("🏏 Players", mod_players_ui("players")),
-  nav_panel("🏆 Teams", mod_teams_ui("teams")),
-  nav_panel("🏟️ Matches", mod_matches_ui("matches")),
-  nav_panel("📊 Venues", mod_venues_ui("venues")),
-  nav_panel("⚡ Predictions", mod_predictions_ui("predictions")),
-  nav_panel("🤖 Ask CricLens", mod_ai_chat_ui("ai_chat"))
+  nav_panel(tagList(cl_icon("overview"), "Overview"), value = "overview", mod_overview_ui("overview")),
+  nav_panel(tagList(cl_icon("players"), "Players"), value = "players", mod_players_ui("players")),
+  nav_panel(tagList(cl_icon("teams"), "Teams"), value = "teams", mod_teams_ui("teams")),
+  nav_panel(tagList(cl_icon("matches"), "Matches"), value = "matches", mod_matches_ui("matches")),
+  nav_panel(tagList(cl_icon("venues"), "Venues"), value = "venues", mod_venues_ui("venues")),
+  nav_panel(tagList(cl_icon("h2h"), "Player H2H"), value = "player_h2h", mod_player_h2h_ui("player_h2h")),
+  nav_panel(tagList(cl_icon("predictions"), "Predictions"), value = "predictions", mod_predictions_ui("predictions")),
+  nav_panel(tagList(cl_icon("explorer"), "Data Explorer"), value = "data_explorer", mod_data_explorer_ui("data_explorer")),
+  nav_panel(tagList(cl_icon("ai"), "Ask CricLens"), value = "ai_chat", mod_ai_chat_ui("ai_chat"))
 )

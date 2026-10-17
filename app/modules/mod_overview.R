@@ -27,46 +27,69 @@ mod_overview_ui <- function(id) {
     fluidRow(
       column(6,
              div(class = "criclens-card",
-                 h4("🏆 Most Successful IPL Franchises", style = "color: #00d2ff; font-weight: 700;"),
-                 plotlyOutput(ns("plot_team_overview"), height = "360px")
+                 h4(tagList(cl_icon("trophy"), "Most Successful IPL Franchises"), style = "color: #00d2ff; font-weight: 700;"),
+                 plotlyOutput(ns("plot_team_overview"), height = paste0(cl_plot_height(8, 34, 110, 320), "px"))
              )
       ),
       column(6,
              div(class = "criclens-card",
-                 h4("🏏 All-Time Leading Run Scorers", style = "color: #ff5e00; font-weight: 700;"),
-                 plotlyOutput(ns("plot_top_batters"), height = "360px")
+                 h4(tagList(cl_icon("bat"), "All-Time Leading Run Scorers"), style = "color: #ff5e00; font-weight: 700;"),
+                 plotlyOutput(ns("plot_top_batters"), height = paste0(cl_plot_height(8, 34, 110, 320), "px"))
              )
       )
     )
   )
 }
 
-mod_overview_server <- function(id, df_feat, team_summary, batting_summary) {
+mod_overview_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
     # Dynamic KPI Calculations
     output$kpi_matches <- renderText({
-      format(length(unique(df_feat$match_id)), big.mark = ",")
+      d <- df_feat()
+      format(length(unique(d$match_id)), big.mark = ",")
     })
 
     output$kpi_runs <- renderText({
-      format(sum(df_feat$runs_total, na.rm = TRUE), big.mark = ",")
+      d <- df_feat()
+      format(sum(d$runs_total, na.rm = TRUE), big.mark = ",")
     })
 
     output$kpi_wickets <- renderText({
-      format(sum(df_feat$is_wicket, na.rm = TRUE), big.mark = ",")
+      d <- df_feat()
+      format(sum(d$is_wicket, na.rm = TRUE), big.mark = ",")
     })
 
     output$kpi_seasons <- renderText({
-      seasons <- sort(unique(df_feat$season_year))
+      d <- df_feat()
+      seasons <- sort(unique(d$season_year))
+      seasons <- seasons[!is.na(seasons)]
+      if (!length(seasons)) return("0")
       paste0(length(seasons), " (", min(seasons), "-", max(seasons), ")")
     })
 
     output$plot_team_overview <- renderPlotly({
-      plot_team_wins_chart(team_summary %>% head(8), title = "Top Franchises by Match Victories")
+      franchise <- get_team_performance_summary(df_feat())
+      cl_leaderboard_chart(
+        franchise,
+        label = "team",
+        value = "wins",
+        value_name = "Total wins",
+        details = c(Matches = "matches_played", `Win rate` = "win_pct"),
+        color = cl_colors[["navy"]],
+        top_n = 8
+      )
     })
 
     output$plot_top_batters <- renderPlotly({
-      plot_top_batters_chart(batting_summary %>% head(8), title = "Top IPL Run Scorers")
+      batters <- get_top_batters(df_feat(), top_n = 8)
+      cl_leaderboard_chart(
+        batters,
+        label = "batter",
+        value = "total_runs",
+        value_name = "Total runs",
+        details = c(Avg = "average", SR = "strike_rate"),
+        top_n = 8
+      )
     })
   })
 }

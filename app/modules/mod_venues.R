@@ -7,8 +7,11 @@ mod_venues_ui <- function(id) {
     fluidRow(
       column(4,
              div(class = "criclens-card",
-                 h4("🏟️ Stadium Selector", style = "color: #00d2ff; font-weight: 700;"),
-                 selectInput(ns("venue_select"), "Select IPL Venue:", choices = NULL, selectize = TRUE)
+                 h4(tagList(cl_icon("venues"), "Stadium Selector"), style = "color: #00d2ff; font-weight: 700;"),
+                 selectizeInput(
+                   ns("venue_select"), "Select IPL Venue:", choices = NULL,
+                   options = list(placeholder = "Type a stadium or city to find a venue...", maxOptions = 1000)
+                 )
              )
       ),
       column(8,
@@ -20,7 +23,7 @@ mod_venues_ui <- function(id) {
     fluidRow(
       column(12,
              div(class = "criclens-card",
-                 h4("📊 Average 1st Innings Score Across IPL Grounds", style = "color: #9d4edd; font-weight: 700;"),
+                 h4(tagList(cl_icon("chart"), "Average 1st Innings Score Across IPL Grounds"), style = "color: #9d4edd; font-weight: 700;"),
                  plotlyOutput(ns("plot_venue_leaderboard"), height = "420px")
              )
       )
@@ -31,13 +34,14 @@ mod_venues_ui <- function(id) {
 mod_venues_server <- function(id, df_feat) {
   moduleServer(id, function(input, output, session) {
     observe({
-      v_list <- get_venue_list(df_feat)
-      updateSelectInput(session, "venue_select", choices = v_list$venue, selected = "Eden Gardens")
+      v_list <- get_venue_list(df_feat())
+      selected_venue <- if ("Eden Gardens" %in% v_list$venue) "Eden Gardens" else if (length(v_list$venue)) v_list$venue[1] else character()
+      updateSelectInput(session, "venue_select", choices = v_list$venue, selected = selected_venue)
     })
 
     output$venue_profile_card <- renderUI({
       req(input$venue_select)
-      prof <- get_venue_profile(df_feat, input$venue_select)
+      prof <- get_venue_profile(df_feat(), input$venue_select)
       if (is.null(prof)) return(div("No venue details found."))
 
       tagList(
@@ -53,8 +57,16 @@ mod_venues_server <- function(id, df_feat) {
     })
 
     output$plot_venue_leaderboard <- renderPlotly({
-      v_lead <- get_venue_leaderboard(df_feat, min_matches = 10)
-      plot_venue_scores_chart(v_lead)
+      v_lead <- get_venue_leaderboard(df_feat(), min_matches = 10)
+      if (is.null(v_lead) || nrow(v_lead) == 0) return(plotly_empty())
+      cl_venue_score_chart(
+        v_lead,
+        venue = "venue",
+        score = "avg_1st_inn_score",
+        matches = "matches",
+        selected = input$venue_select,
+        min_matches = 10
+      )
     })
   })
 }

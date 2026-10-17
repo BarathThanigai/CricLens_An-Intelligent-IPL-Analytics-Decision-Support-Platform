@@ -1009,4 +1009,48 @@ cat("  [PASS] Missing API key is diagnosed; no network call is required.\n\n")
 
 cat("=====================================================\n")
 cat("  ALL TEST SUITES PASSED WITH 100% SUCCESS!         \n")
+# Test 8: Role-aware impact scores, global filters, and Data Explorer combinations
+cat("Test 8: Validating responsive impact scoring and combined filters...\n")
+synthetic <- data.frame(
+  match_id = rep(1:4, each = 60), innings = 1,
+  season_year = rep(c(2023, 2024, 2025, 2026), each = 60),
+  date = as.Date("2024-01-01") + rep(0:3, each = 60),
+  batting_team = rep(c("Team A", "Team B", "Team A", "Team B"), each = 60),
+  bowling_team = rep(c("Team B", "Team A", "Team B", "Team A"), each = 60),
+  venue = rep(c("Ground 1", "Ground 1", "Ground 2", "Ground 2"), each = 60),
+  batter = rep(c("Player A", "Player B", "Player C", "Player D"), each = 60),
+  bowler = rep(c("Player B", "Player C", "Player D", "Player A"), each = 60),
+  runs_batter = rep(c(1, 2, 3, 4), each = 60), balls_faced = 1L,
+  player_out = NA_character_, runs_bowler = rep(c(1, 2, 3, 4), each = 60),
+  valid_ball = 1L, is_bowler_wicket = rep(rep(c(TRUE, FALSE), 30), 4),
+  stringsAsFactors = FALSE
+)
+score_bat <- get_player_impact_scores(synthetic, 1, 0)
+score_bowl <- get_player_impact_scores(synthetic, 0, 1)
+score_reweighted <- weight_player_impact_scores(get_player_impact_scores(synthetic, 1, 1), 0, 1)
+stopifnot(nrow(score_bat) == 4, nrow(score_bowl) == 4)
+stopifnot(any(abs(score_bat$impact - score_bowl$impact) > 0.01, na.rm = TRUE))
+stopifnot(isTRUE(all.equal(score_bowl$impact, score_reweighted$impact)))
+profiles <- get_player_role_profiles(synthetic, c("Player A", "Player B"), "Ground 1")
+stopifnot(all(c("Batting", "Bowling") %in% profiles$role), all(profiles$matches > 0), all(profiles$balls > 0))
+
+global_filtered <- filter_global_data(synthetic, season = "2024", team = "Team A", venue = "Ground 1")
+stopifnot(nrow(global_filtered) == 60, all(global_filtered$season_year == 2024))
+explorer_filtered <- apply_explorer_filters(synthetic, global_search = "player a",
+  category_filters = list(list(column = "venue", values = "Ground 1")),
+  numeric_filters = list(list(column = "runs_batter", min = 1, max = 1)))
+stopifnot(nrow(explorer_filtered) == 60, all(explorer_filtered$batter == "Player A"))
+date_filtered <- apply_explorer_filters(synthetic, date_filter = list(column = "date", range = as.Date(c("2024-01-02", "2024-01-03"))))
+stopifnot(nrow(date_filtered) == 120)
+csv_tmp <- tempfile(fileext = ".csv")
+write.csv(explorer_filtered, csv_tmp, row.names = FALSE)
+stopifnot(nrow(read.csv(csv_tmp)) == nrow(explorer_filtered))
+unlink(csv_tmp)
+stopifnot(nrow(apply_explorer_filters(synthetic)) == nrow(synthetic))
+cat("  [PASS] Role weights recalculate; H2H roles and samples, combined filters, reset baseline, and filtered CSV verified.\n\n")
+
+
+cat("=====================================================\n")
+cat("  ALL TEST SUITES PASSED WITH 100% SUCCESS!         \n")
+
 cat("=====================================================\n")
