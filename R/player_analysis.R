@@ -594,7 +594,7 @@ weight_player_impact_scores <- function(scores, batting_weight = 0.6, bowling_we
 get_player_role_profiles <- function(df, player_names, venue = NULL) {
   d <- df %>% filter(innings %in% c(1, 2))
   if (!is.null(venue) && length(venue) == 1 && !is.na(venue) && nzchar(venue)) {
-    d <- d %>% filter(.data$venue == venue)
+    d <- d %>% filter(.data$venue == .env$venue)
   }
   profiles <- list()
   for (p in unique(player_names)) {
@@ -630,4 +630,42 @@ get_player_role_profiles <- function(df, player_names, venue = NULL) {
   }
   if (!length(profiles)) return(data.frame())
   do.call(rbind, profiles)
+}
+
+#' Summarize direct batter-versus-bowler encounters for a two-player matchup.
+get_player_batter_bowler_matchup <- function(df, player_names) {
+  players <- unique(as.character(player_names))
+  players <- players[!is.na(players) & nzchar(players)]
+  if (length(players) != 2L) return(data.frame())
+
+  d <- df %>% filter(innings %in% c(1, 2))
+
+  rows <- lapply(seq_len(2L), function(i) {
+    batter <- players[[i]]
+    bowler <- players[[3L - i]]
+    # Use .env explicitly: bare `batter` / `bowler` names are also dataframe
+    # columns, so data-mask lookup would otherwise compare each column to itself.
+    balls <- d %>% filter(.data$batter == .env$batter, .data$bowler == .env$bowler)
+    faced <- sum(balls$balls_faced == 1, na.rm = TRUE)
+    legal <- sum(balls$valid_ball == 1, na.rm = TRUE)
+    runs <- sum(balls$runs_batter, na.rm = TRUE)
+    conceded <- sum(balls$runs_bowler, na.rm = TRUE)
+    wickets <- sum(balls$is_bowler_wicket == 1 & balls$player_out == batter, na.rm = TRUE)
+
+    data.frame(
+      Batter = batter,
+      Bowler = bowler,
+      Matchup = paste(batter, "vs", bowler),
+      Matches = dplyr::n_distinct(balls$match_id),
+      Runs = runs,
+      `Balls faced` = faced,
+      `Strike rate` = if (faced > 0) round(100 * runs / faced, 1) else NA_real_,
+      `Dismissals by bowler` = wickets,
+      `Bowler economy` = if (legal > 0) round(6 * conceded / legal, 2) else NA_real_,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  do.call(rbind, rows)
 }
