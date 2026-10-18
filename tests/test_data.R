@@ -5,12 +5,16 @@ cat("=====================================================\n")
 cat("  CricLens Test Suite: Validating R Engine & Phase 1 \n")
 cat("=====================================================\n\n")
 
+Sys.setenv(NVIDIA_API_KEY = "")
+
 suppressMessages({
   source("R/player_analysis.R")
   source("R/team_analysis.R")
   source("R/match_analysis.R")
   source("R/venue_analysis.R")
   source("R/predictive_models.R")
+  source("R/data_filters.R")
+  source("R/data_explorer.R")
   source("ai/nim_client.R")
   source("ai/prompt_templates.R")
   source("ai/query_router.R")
@@ -243,10 +247,21 @@ cat("Test 6: Validating Chronological Win Probability ML Model & Test Metrics...
 model_obj <- readRDS(
   "data/processed/win_prob_model.rds"
 )
+loaded_model <- load_win_prob_model(
+  "data/processed/win_prob_model.rds"
+)
 
 stopifnot(
   is.list(model_obj) &&
-    "test_accuracy" %in% names(model_obj)
+    "test_accuracy" %in% names(model_obj),
+  is.list(loaded_model),
+  inherits(loaded_model$model, "glm"),
+  model_obj$model$family$family == "binomial",
+  identical(all.vars(stats::terms(model_obj$model))[1], "is_chase_winner"),
+  setequal(
+    all.vars(stats::delete.response(stats::terms(model_obj$model))),
+    c("runs_required", "balls_remaining", "wickets_remaining", "req_rr", "current_rr")
+  )
 )
 
 stopifnot(
@@ -278,11 +293,15 @@ prediction <- predict_live_win_prob(
 )
 
 stopifnot(
-  prediction$chase_win_prob >= 1,
-  prediction$chase_win_prob <= 99,
-  prediction$defend_win_prob >= 1,
-  prediction$defend_win_prob <= 99,
-  prediction$chase_win_prob + prediction$defend_win_prob == 100
+  prediction$chase_win_prob >= 0,
+  prediction$chase_win_prob <= 1,
+  prediction$defend_win_prob >= 0,
+  prediction$defend_win_prob <= 1,
+  abs(prediction$chase_win_prob + prediction$defend_win_prob - 1) < 1e-12,
+  round(prediction$chase_win_prob * 100, 1) == 64.2,
+  round(prediction$defend_win_prob * 100, 1) == 35.8,
+  prediction$balls_remaining == 48,
+  prediction$runs_required == 70
 )
 
 raw_model_prediction <- predict_live_win_prob(
@@ -296,6 +315,35 @@ raw_model_prediction <- predict_live_win_prob(
 stopifnot(
   raw_model_prediction$chase_win_prob == prediction$chase_win_prob,
   raw_model_prediction$defend_win_prob == prediction$defend_win_prob
+)
+
+invalid_prediction_inputs <- list(
+  list(target = NA_real_, current_runs = 110, overs_bowled = 12, wickets_down = 3),
+  list(target = 0, current_runs = 0, overs_bowled = 0, wickets_down = 0),
+  list(target = 180, current_runs = -1, overs_bowled = 12, wickets_down = 3),
+  list(target = 180, current_runs = 180, overs_bowled = 12, wickets_down = 3),
+  list(target = 180, current_runs = 110, overs_bowled = 12.6, wickets_down = 3),
+  list(target = 180, current_runs = 110, overs_bowled = 20, wickets_down = 3),
+  list(target = 180, current_runs = 110, overs_bowled = 12, wickets_down = 10),
+  list(target = 180, current_runs = 110, overs_bowled = 12, wickets_down = 1.5)
+)
+stopifnot(all(vapply(
+  invalid_prediction_inputs,
+  function(args) {
+    inherits(tryCatch(
+      do.call(predict_live_win_prob, c(args, list(model = model_obj))),
+      error = identity
+    ), "error")
+  },
+  logical(1)
+)))
+
+missing_model <- load_win_prob_model(
+  file.path(tempdir(), "missing-win-prob-model.rds")
+)
+stopifnot(
+  inherits(missing_model, "criclens_model_load_error"),
+  grepl("not found", missing_model$message, fixed = TRUE)
 )
 
 invalid_model_error <- tryCatch(
@@ -347,7 +395,7 @@ cat(
   sep = ""
 )
 cat(
-  "  [PASS] Live prediction accepts the serialized model wrapper and fitted glm; invalid models fail with a clear message.\n\n"
+  "  [PASS] Wrapper/raw model loading, schema and target validation, valid 0-1 probabilities, legal overs, input ranges, and missing-model diagnostics verified.\n\n"
 )
 
 
@@ -365,6 +413,23 @@ call_nvidia_nim <- function(
 query_res <- process_criclens_query(
   "Who has the most runs in IPL?",
   df
+)
+
+verified_explanation_result <- list(
+  intent = "player_profile",
+  result = data.frame(player = "V Kohli", total_runs = 9336)
+)
+stopifnot(
+  explanation_numeric_values_are_supported(
+    "V Kohli's R-calculated career total is 9,336 runs.",
+    "Show V Kohli stats",
+    verified_explanation_result
+  ),
+  !explanation_numeric_values_are_supported(
+    "V Kohli scored 9,999 runs.",
+    "Show V Kohli stats",
+    verified_explanation_result
+  )
 )
 
 stopifnot(
@@ -695,9 +760,16 @@ unsupported_query <- process_criclens_query(
   "What is the weather in Mumbai tomorrow?",
   df
 )
+prediction_explanation_query <- process_criclens_query(
+  "Explain what the IPL win probability prediction means in CricLens.",
+  df
+)
 stopifnot(
   identical(empty_query, "Please enter a question."),
   grepl("can't answer", unsupported_query, ignore.case = TRUE),
+  grepl("team chasing the target", prediction_explanation_query, fixed = TRUE),
+  grepl("complement", prediction_explanation_query, fixed = TRUE),
+  grepl("not a guarantee", prediction_explanation_query, fixed = TRUE),
   grepl("couldn't process", format_r_result(NULL), ignore.case = TRUE),
   grepl("No bowling data", format_r_result(list(
     intent = "top_bowlers",
@@ -812,6 +884,15 @@ stopifnot(
     fixed = TRUE
   ),
   !grepl("Team Performance", format_r_result(kohli_history_result), fixed = TRUE)
+)
+rendered_kohli_history <- render_markdown_to_html(
+  format_r_result(kohli_history_result)
+)
+stopifnot(
+  grepl("<table", rendered_kohli_history, fixed = TRUE),
+  grepl("<h5>🏏 Teams Represented by", rendered_kohli_history, fixed = TRUE),
+  grepl("<th>Season</th>", rendered_kohli_history, fixed = TRUE),
+  grepl("<td>Royal Challengers Bengaluru</td>", rendered_kohli_history, fixed = TRUE)
 )
 
 kohli_history_phrasing <- fallback_query_intent(
@@ -939,7 +1020,9 @@ stopifnot(
 )
 
 source("app/modules/mod_ai_chat.R")
+source("app/modules/mod_predictions.R")
 first_session_chat <- NULL
+nim_status_message <- NULL
 shiny::testServer(
   mod_ai_chat_server,
   args = list(df_feat = df),
@@ -950,6 +1033,10 @@ shiny::testServer(
     )
     first_session_chat <<- paste(
       as.character(output$chat_response_area),
+      collapse = ""
+    )
+    nim_status_message <<- paste(
+      as.character(output$nim_status),
       collapse = ""
     )
   }
@@ -972,12 +1059,58 @@ shiny::testServer(
 )
 stopifnot(
   grepl("Top Run Scorers", first_session_chat, fixed = TRUE),
-  grepl("can't answer", second_session_chat, ignore.case = TRUE)
+  grepl("can't answer", second_session_chat, ignore.case = TRUE),
+  grepl(
+    if (nzchar(Sys.getenv("NVIDIA_API_KEY"))) "Configured" else "Not configured",
+    nim_status_message,
+    fixed = TRUE
+  )
+)
+
+prediction_card <- NULL
+shiny::testServer(
+  mod_predictions_server,
+  args = list(win_model = model_obj),
+  {
+    session$setInputs(
+      target = 180,
+      current_runs = 110,
+      overs_bowled = "12.0",
+      wickets_down = 3
+    )
+    first_prediction_card <- paste(
+      as.character(output$win_prob_results_card),
+      collapse = ""
+    )
+    session$setInputs(current_runs = 120)
+    updated_prediction_card <- paste(
+      as.character(output$win_prob_results_card),
+      collapse = ""
+    )
+    prediction_card <<- c(first_prediction_card, updated_prediction_card)
+  }
+)
+missing_model_card <- NULL
+shiny::testServer(
+  mod_predictions_server,
+  args = list(win_model = missing_model),
+  {
+    missing_model_card <<- paste(
+      as.character(output$win_prob_results_card),
+      collapse = ""
+    )
+  }
+)
+stopifnot(
+  grepl("64.2%", prediction_card[1], fixed = TRUE),
+  grepl("Runs Required: 70 runs", prediction_card[1], fixed = TRUE),
+  grepl("Runs Required: 60 runs", prediction_card[2], fixed = TRUE),
+  grepl("Win probability model unavailable", missing_model_card, fixed = TRUE)
 )
 
 cat(
   "  [PASS] varied phrasing, malformed/empty/unsupported input, leaderboard paging,",
-  "follow-ups, and isolated Shiny chat sessions.\n\n"
+  "follow-ups, isolated Shiny chat sessions, reactive prediction updates, and visible model errors.\n\n"
 )
 
 cat("Test 7F: Validating malformed NIM response fallback...\n")
@@ -989,22 +1122,165 @@ nim_test_env$Sys.getenv <- function(name) {
 nim_test_env$POST <- function(...) structure(list(), class = "mock_response")
 nim_test_env$status_code <- function(response) 200L
 nim_test_env$content <- function(...) list(choices = list("not-a-message-object"))
+malformed_nim_events <- list()
 malformed_nim_result <- nim_test_env$call_nvidia_nim(
   "test",
-  "test system prompt"
+  "test system prompt",
+  status_callback = function(status, message) {
+    malformed_nim_events[[length(malformed_nim_events) + 1L]] <<-
+      list(status = status, message = message)
+  }
 )
-stopifnot(is.null(malformed_nim_result))
+stopifnot(
+  is.null(malformed_nim_result),
+  any(vapply(malformed_nim_events, function(event) {
+    identical(event$status, "unavailable")
+  }, logical(1))),
+  !any(grepl("test-only-key", vapply(
+    malformed_nim_events,
+    `[[`,
+    character(1),
+    "message"
+  ), fixed = TRUE))
+)
 cat("  [PASS] Malformed NIM response returns NULL for deterministic fallback.\n\n")
+
+nim_test_env$status_code <- function(response) 410L
+http_410_body <- paste0(
+  '{"error":{"message":"The model deployment has been retired.",',
+  '"authorization":"Bearer test-only-key",',
+  '"api_key":"test-only-key"}}'
+)
+nim_test_key <- nim_test_env$Sys.getenv("NVIDIA_API_KEY")
+http_410_body <- paste0(
+  '{"error":{"message":"The model deployment has been retired.",',
+  '"authorization":"Bearer ',
+  nim_test_key,
+  '","api_key":"',
+  nim_test_key,
+  '"}}'
+)
+nim_test_env$content <- function(response, as, encoding) {
+  stopifnot(identical(as, "text"))
+  http_410_body
+}
+http_410_events <- list()
+http_410_logs <- capture.output(
+  http_410_result <- nim_test_env$call_nvidia_nim(
+    "test",
+    "test system prompt",
+    status_callback = function(status, message) {
+      http_410_events[[length(http_410_events) + 1L]] <<-
+        list(status = status, message = message)
+    }
+  ),
+  type = "message"
+)
+http_410_diagnostic <- vapply(
+  http_410_events,
+  `[[`,
+  character(1),
+  "message"
+)
+stopifnot(
+  is.null(http_410_result),
+  any(vapply(http_410_events, function(event) {
+    identical(event$status, "unavailable")
+  }, logical(1))),
+  any(grepl("HTTP 410", http_410_diagnostic, fixed = TRUE)),
+  any(grepl("model deployment has been retired", http_410_diagnostic, fixed = TRUE)),
+  !any(grepl("test-only-key", http_410_diagnostic, fixed = TRUE)),
+  !any(grepl("test-only-key", http_410_logs, fixed = TRUE)),
+  any(grepl("[REDACTED]", http_410_diagnostic, fixed = TRUE))
+)
+cat("  [PASS] HTTP 410 exposes a useful sanitized response body without credentials.\n\n")
+
+nim_test_env$POST <- function(...) {
+  stop(paste("Could not resolve api.nvidia.com.", "Authorization: Bearer test-only-key"))
+}
+nim_test_env$status_code <- function(response) 200L
+nim_test_env$content <- function(...) list(choices = list("not-a-message-object"))
+timeout_nim_events <- list()
+timeout_nim_logs <- capture.output(
+  timeout_nim_result <- nim_test_env$call_nvidia_nim(
+    "test",
+    "test system prompt",
+    status_callback = function(status, message) {
+      timeout_nim_events[[length(timeout_nim_events) + 1L]] <<-
+        list(status = status, message = message)
+    }
+  ),
+  type = "message"
+)
+timeout_nim_diagnostic <- vapply(
+  timeout_nim_events,
+  `[[`,
+  character(1),
+  "message"
+)
+stopifnot(
+  is.null(timeout_nim_result),
+  any(vapply(timeout_nim_events, function(event) {
+    identical(event$status, "unavailable")
+  }, logical(1))),
+  any(grepl("Could not resolve api.nvidia.com", timeout_nim_diagnostic, fixed = TRUE)),
+  !any(grepl("test-only-key", timeout_nim_diagnostic, fixed = TRUE)),
+  !any(grepl("test-only-key", timeout_nim_logs, fixed = TRUE))
+)
+cat("  [PASS] Connection failures expose a sanitized diagnostic and use deterministic fallback.\n\n")
 
 cat("Test 7G: Validating NIM-disabled diagnostics...\n")
 stopifnot(grepl(
-  "NVIDIA_API_KEY is not set",
+  "NVIDIA_API_KEY",
   nim_client_status(),
   fixed = TRUE
 ))
 nim_disabled_result <- nim_client_call("test", "test system prompt")
 stopifnot(is.null(nim_disabled_result))
+missing_key_events <- list()
+nim_client_call(
+  "test",
+  "test system prompt",
+  status_callback = function(status, message) {
+    missing_key_events[[length(missing_key_events) + 1L]] <<-
+      list(status = status, message = message)
+  }
+)
+stopifnot(any(vapply(missing_key_events, function(event) {
+  identical(event$status, "not_configured")
+}, logical(1))))
 cat("  [PASS] Missing API key is diagnosed; no network call is required.\n\n")
+
+nim_test_env$Sys.getenv <- function(name, unset = "") {
+  if (identical(name, "NVIDIA_API_KEY")) "test-only-key" else ""
+}
+nim_test_env$POST <- function(url, ..., body, encode, config) {
+  stopifnot(
+    identical(url, "https://integrate.api.nvidia.com/v1/chat/completions"),
+    identical(body$model, "nvidia/nemotron-3.5-lightning-30b-a3b")
+  )
+  structure(list(), class = "mock_response")
+}
+nim_test_env$status_code <- function(response) 200L
+nim_test_env$content <- function(...) {
+  list(choices = list(list(message = list(content = "Mocked NIM response."))))
+}
+connected_nim_events <- list()
+connected_nim_result <- nim_test_env$call_nvidia_nim(
+  "test",
+  "test system prompt",
+  status_callback = function(status, message) {
+    connected_nim_events[[length(connected_nim_events) + 1L]] <<-
+      list(status = status, message = message)
+  }
+)
+stopifnot(
+  identical(connected_nim_result, "Mocked NIM response."),
+  any(vapply(connected_nim_events, function(event) {
+    identical(event$status, "connected")
+  }, logical(1)))
+)
+cat("  [PASS] Configured NIM uses the project endpoint/model and reports successful connectivity (mocked HTTP).\n\n")
 
 
 cat("=====================================================\n")

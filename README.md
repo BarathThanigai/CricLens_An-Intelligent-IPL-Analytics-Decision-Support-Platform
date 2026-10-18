@@ -16,7 +16,7 @@ CricLens is a professional data analytics platform built using **R (v4.6.1)** as
    - Venue pitch profiles & stadium scoring trends.
 
 2. **Predictive Machine Learning Engine**
-   - **Live Match Win Probability Model** (Logistic Regression trained on 136,967 delivery snapshots, achieving **78.06% accuracy**).
+   - **Live Match Win Probability Model** (binomial logistic regression trained on 113,331 delivery snapshots and evaluated on 23,636 later-season snapshots; the saved evaluation reports 79.79% accuracy, 0.9084 ROC-AUC, 0.1365 Brier score, and 0.4181 log loss).
    - Interactive live match situation simulator predicting win probabilities for chasing vs defending teams.
 
 3. **NVIDIA NIM AI Integration Layer**
@@ -28,11 +28,15 @@ CricLens is a professional data analytics platform built using **R (v4.6.1)** as
    - Interactive `Plotly` analytical charts & responsive `DT` data tables.
 
 5. **Filterable Player and Data Analysis**
-   - Shared season, team, and venue filters update relevant analytical pages.
+   - Player and Data Explorer filters remain local to their pages.
    - Player impact scores combine sample-qualified batting and bowling components and recalculate as filters or weights change.
    - Player head-to-head views show role-supported batting and bowling profiles separately.
    - Data Explorer combines global search, category, text, numeric, and date filters. Its CSV export contains every matching row.
    - Wide tables scroll inside their cards, with responsive layout behavior for smaller screens.
+
+### Prediction model scope
+
+The saved model estimates whether the second-innings batting team will win from runs required, legal balls remaining, wickets remaining, required run rate, and current run rate. These are model estimates, not guarantees, and the inputs do not account for individual batter/bowler matchups, venue, or other live match conditions. The reported evaluation is based on a later-season holdout in the saved training result; before using these estimates for decisions, evaluate calibration by season and match and document performance on newer held-out data.
 
 ---
 
@@ -147,3 +151,15 @@ Rscript tests/test_data.R
 - **R is the Single Source of Truth**: All statistical metrics are strictly calculated by R scripts.
 - **NVIDIA NIM Integration**: NVIDIA NIM API is used solely for natural-language query interpretation and explaining R-calculated results.
 - **Secrets Management**: Set `NVIDIA_API_KEY` in environment variables or `.Renviron`. Never commit API keys to version control.
+
+### Configuring NVIDIA NIM
+
+Set `NVIDIA_API_KEY` in the environment of the R process running Shiny, or add it to your user-level `.Renviron` file:
+
+```text
+NVIDIA_API_KEY=your_nvidia_api_key
+```
+
+Restart R after changing `.Renviron` so the server process can read it. The Ask CricLens tab shows whether NIM is configured, connecting, connected after a successful request, or temporarily unavailable. Use **Refresh connection status** to re-read the server process's current environment. The key is never sent to the browser; when it is missing or NIM fails, queries continue through deterministic R intent parsing and analytics.
+
+NIM requests use NVIDIA's chat completions endpoint and the configured `nvidia/nemotron-3.5-lightning-30b-a3b` model. NIM interprets questions and may explain verified results; all statistics are calculated by R from the processed IPL dataset.

@@ -74,6 +74,24 @@ safe_integer <- function(x, default = NULL) {
   value
 }
 
+report_nim_status <- function(status_callback, status, message) {
+  if (is.function(status_callback)) {
+    status_callback(status, message)
+  }
+}
+
+call_nim_for_query <- function(prompt, system_prompt, status_callback = NULL) {
+  nim_arguments <- list(
+    prompt = prompt,
+    system_prompt = system_prompt
+  )
+  nim_formals <- names(formals(call_nvidia_nim))
+  if ("status_callback" %in% nim_formals || "..." %in% nim_formals) {
+    nim_arguments$status_callback <- status_callback
+  }
+  do.call(call_nvidia_nim, nim_arguments)
+}
+
 
 escape_html <- function(x) {
 
@@ -129,26 +147,7 @@ render_markdown_to_html <- function(text) {
     text
   )
 
-  # Headings.
-  text <- gsub(
-    "^### (.*)$",
-    "<h5>\\1</h5>",
-    text
-  )
-
-  text <- gsub(
-    "^## (.*)$",
-    "<h4>\\1</h4>",
-    text
-  )
-
-  text <- gsub(
-    "^# (.*)$",
-    "<h3>\\1</h3>",
-    text
-  )
-
-  # Bullet points.
+  # Headings, paragraphs, lists, and simple pipe tables.
   lines <- strsplit(
     text,
     "\n",
@@ -158,67 +157,108 @@ render_markdown_to_html <- function(text) {
   output <- character(0)
 
   in_list <- FALSE
+  is_table_row <- function(line) {
+    startsWith(trimws(line), "|") && endsWith(trimws(line), "|")
+  }
+  table_cells <- function(line) {
+    line <- trimws(line)
+    line <- substring(line, 2, nchar(line) - 1)
+    trimws(strsplit(line, "|", fixed = TRUE)[[1]])
+  }
+  is_table_separator <- function(cells) {
+    length(cells) > 0 && all(grepl("^:?-{3,}:?$", cells))
+  }
 
-  for (line in lines) {
+  line_index <- 1L
+  while (line_index <= length(lines)) {
+    trimmed <- trimws(lines[line_index])
 
-    trimmed <- trimws(line)
-
-    if (str_detect(trimmed, "^[-*] ")) {
-
-      if (!in_list) {
-        output <- c(
-          output,
-          "<ul>"
-        )
-
-        in_list <- TRUE
-      }
-
-      item <- str_remove(
-        trimmed,
-        "^[-*] "
-      )
-
-      output <- c(
-        output,
-        paste0(
-          "<li>",
-          item,
-          "</li>"
-        )
-      )
-
-    } else {
-
+    if (is_table_row(trimmed)) {
       if (in_list) {
-
-        output <- c(
-          output,
-          "</ul>"
-        )
-
+        output <- c(output, "</ul>")
         in_list <- FALSE
       }
 
-      if (nzchar(trimmed)) {
+      rows <- list(table_cells(trimmed))
+      line_index <- line_index + 1L
+      if (line_index <= length(lines) && is_table_row(lines[line_index]) &&
+          is_table_separator(table_cells(lines[line_index]))) {
+        line_index <- line_index + 1L
+      }
 
-        output <- c(
-          output,
-          paste0(
-            "<p>",
-            trimmed,
-            "</p>"
-          )
+      while (line_index <= length(lines) && is_table_row(lines[line_index])) {
+        cells <- table_cells(lines[line_index])
+        if (!is_table_separator(cells)) {
+          rows[[length(rows) + 1L]] <- cells
+        }
+        line_index <- line_index + 1L
+      }
+
+      header <- paste0("<th>", rows[[1]], "</th>", collapse = "")
+      body <- if (length(rows) > 1L) {
+        paste0(
+          "<tr>",
+          vapply(rows[-1], function(cells) {
+            paste0("<td>", cells, "</td>", collapse = "")
+          }, character(1)),
+          "</tr>",
+          collapse = ""
         )
+      } else {
+        ""
+      }
+      output <- c(
+        output,
+        paste0(
+          "<table class=\"table table-sm\"><thead><tr>",
+          header,
+          "</tr></thead><tbody>",
+          body,
+          "</tbody></table>"
+        )
+      )
+      next
+    }
+
+    if (str_detect(trimmed, "^[-*] ")) {
+      if (!in_list) {
+        output <- c(output, "<ul>")
+        in_list <- TRUE
+      }
+      item <- str_remove(trimmed, "^[-*] ")
+      output <- c(output, paste0("<li>", item, "</li>"))
+    } else {
+      if (in_list) {
+        output <- c(output, "</ul>")
+        in_list <- FALSE
+      }
+      if (nzchar(trimmed)) {
+        heading_level <- if (startsWith(trimmed, "### ")) {
+          5L
+        } else if (startsWith(trimmed, "## ")) {
+          4L
+        } else if (startsWith(trimmed, "# ")) {
+          3L
+        } else {
+          NULL
+        }
+        if (is.null(heading_level)) {
+          output <- c(output, paste0("<p>", trimmed, "</p>"))
+        } else {
+          heading_text <- substring(trimmed, heading_level)
+          output <- c(
+            output,
+            paste0("<h", heading_level, ">", heading_text, "</h", heading_level, ">")
+          )
+        }
       }
     }
+
+    line_index <- line_index + 1L
   }
 
   if (in_list) {
-    output <- c(
-      output,
-      "</ul>"
-    )
+    output <- c(output, "</ul>")
   }
 
   paste(
@@ -780,7 +820,8 @@ extract_json_object <- function(text) {
 
 parse_query_intent <- function(
   query,
-  df
+  df,
+  status_callback = NULL
 ) {
 
   query <- safe_character(query)
@@ -794,9 +835,10 @@ parse_query_intent <- function(
     query
   )
 
-  response <- call_nvidia_nim(
+  response <- call_nim_for_query(
     prompt = prompt,
-    system_prompt = INTENT_PARSER_SYSTEM_PROMPT
+    system_prompt = INTENT_PARSER_SYSTEM_PROMPT,
+    status_callback = status_callback
   )
 
   parsed <- extract_json_object(
@@ -804,6 +846,13 @@ parse_query_intent <- function(
   )
 
   if (is.null(parsed)) {
+    if (!is.null(response)) {
+      report_nim_status(
+        status_callback,
+        "degraded",
+        "NVIDIA NIM returned an unusable intent. The query is being interpreted with deterministic R rules."
+      )
+    }
     return(NULL)
   }
 
@@ -1037,6 +1086,25 @@ fallback_query_intent <- function(
   venues <- get_dataset_venues(
     df
   )
+
+  if (
+    str_detect(q_lower, regex("\\b(explain|meaning|means|what does)\\b")) &&
+      str_detect(q_lower, regex("\\b(win|winning) probability\\b"))
+  ) {
+    return(list(
+      intent = "unsupported",
+      parameters = list(
+        reason = paste(
+          "CricLens's win probability is the saved model's estimate that the",
+          "team chasing the target will win from the current match state.",
+          "It uses runs required, balls and wickets remaining, required run",
+          "rate, and current run rate; the defending team's probability is",
+          "the complement of the chasing team's estimate. It is an estimate,",
+          "not a guarantee."
+        )
+      )
+    ))
+  }
 
   # ---------------------------------------------------------------
   # Unsupported / prediction questions
@@ -2107,13 +2175,39 @@ prepare_explainer_payload <- function(
   )
 }
 
+explanation_numeric_values_are_supported <- function(
+  explanation,
+  query,
+  analytics_result
+) {
+  extract_numbers <- function(text) {
+    matches <- unlist(stringr::str_extract_all(
+      text,
+      "(?<![[:alnum:]_])[-+]?(?:[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?|\\.[0-9]+)%?"
+    ))
+    suppressWarnings(as.numeric(gsub("[,+%]", "", matches)))
+  }
+
+  explanation_numbers <- extract_numbers(explanation)
+  if (!length(explanation_numbers)) {
+    return(TRUE)
+  }
+
+  verified_numbers <- extract_numbers(paste(
+    query,
+    prepare_explainer_payload(analytics_result$result)
+  ))
+  all(explanation_numbers %in% verified_numbers)
+}
+
 # ------------------------------------------------------------------
 # Explain validated R result using NIM
 # ------------------------------------------------------------------
 
 explain_validated_result <- function(
   query,
-  analytics_result
+  analytics_result,
+  status_callback = NULL
 ) {
 
   if (is.null(analytics_result)) {
@@ -2148,9 +2242,10 @@ explain_validated_result <- function(
     result_json
   )
 
-  call_nvidia_nim(
+  call_nim_for_query(
     prompt = prompt,
-    system_prompt = RESULT_EXPLAINER_SYSTEM_PROMPT
+    system_prompt = RESULT_EXPLAINER_SYSTEM_PROMPT,
+    status_callback = status_callback
   )
 }
 
@@ -2850,7 +2945,8 @@ resolve_criclens_followup <- function(
 
 process_criclens_query <- function(
   query,
-  df
+  df,
+  status_callback = NULL
 ) {
 
   query <- safe_character(
@@ -2866,7 +2962,7 @@ process_criclens_query <- function(
 
   formatted_result <- tryCatch(
     {
-      process_criclens_query_result(query, df)
+      process_criclens_query_result(query, df, status_callback)
     },
     error = function(error) {
       message(
@@ -2879,7 +2975,7 @@ process_criclens_query <- function(
   formatted_result
 }
 
-process_criclens_query_result <- function(query, df) {
+process_criclens_query_result <- function(query, df, status_callback = NULL) {
 
   # ---------------------------------------------------------------
   # 1. Ask NIM to identify intent
@@ -2887,7 +2983,8 @@ process_criclens_query_result <- function(query, df) {
 
   parsed <- parse_query_intent(
     query,
-    df
+    df,
+    status_callback
   )
 
   # ---------------------------------------------------------------
@@ -2959,7 +3056,8 @@ process_criclens_query_result <- function(query, df) {
   deterministic_result <- format_r_result(analytics_result)
   explanation <- explain_validated_result(
     query,
-    analytics_result
+    analytics_result,
+    status_callback
   )
 
   # ---------------------------------------------------------------
@@ -2972,6 +3070,19 @@ process_criclens_query_result <- function(query, df) {
       !is.na(explanation) &&
       nzchar(trimws(explanation))
   ) {
+
+    if (!explanation_numeric_values_are_supported(
+      explanation,
+      query,
+      analytics_result
+    )) {
+      report_nim_status(
+        status_callback,
+        "degraded",
+        "NVIDIA NIM returned numerical claims not present in the verified R result. The unverified explanation was omitted."
+      )
+      return(deterministic_result)
+    }
 
     # Do not return NIM's API error/fallback notice as the
     # analytical answer.

@@ -102,7 +102,10 @@ train_and_validate_win_prob_model <- function(df, train_end_year = 2023) {
 #' Load or Train Cached Win Probability Model
 get_win_prob_model <- function(df = NULL) {
   if (file.exists(MODEL_CACHE_PATH)) {
-    model_obj <- readRDS(MODEL_CACHE_PATH)
+    model_obj <- load_win_prob_model(MODEL_CACHE_PATH)
+    if (inherits(model_obj, "criclens_model_load_error")) {
+      stop(model_obj$message, call. = FALSE)
+    }
     if (is.list(model_obj) && "model" %in% names(model_obj)) {
       return(model_obj$model)
     }
@@ -114,6 +117,36 @@ get_win_prob_model <- function(df = NULL) {
   } else {
     stop("Model file not found and no dataset provided to train.")
   }
+}
+
+#' Load the saved win probability model without preventing the app from starting
+load_win_prob_model <- function(path = MODEL_CACHE_PATH) {
+  if (!is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)) {
+    return(structure(
+      list(message = "The win probability model path is invalid."),
+      class = "criclens_model_load_error"
+    ))
+  }
+
+  if (!file.exists(path)) {
+    return(structure(
+      list(message = paste0("The win probability model file was not found: ", path)),
+      class = "criclens_model_load_error"
+    ))
+  }
+
+  tryCatch(
+    readRDS(path),
+    error = function(error) {
+      structure(
+        list(message = paste0(
+          "The win probability model could not be loaded: ",
+          conditionMessage(error)
+        )),
+        class = "criclens_model_load_error"
+      )
+    }
+  )
 }
 
 #' Predict Match-State Win Probability for Chasing Team
@@ -154,10 +187,60 @@ predict_live_win_prob <- function(target, current_runs, overs_bowled, wickets_do
     )
   }
 
-  balls_bowled <- min(120, floor(overs_bowled) * 6 + round((overs_bowled %% 1) * 10))
-  balls_remaining <- max(1, 120 - balls_bowled)
-  wickets_remaining <- max(0, 10 - wickets_down)
-  runs_required <- max(0, target - current_runs)
+  if (!setequal(required_predictors, model_predictors)) {
+    stop(
+      "predict_live_win_prob: fitted model predictors do not match the supported live match-state schema."
+    )
+  }
+
+  model_response <- all.vars(stats::terms(model))
+  if (length(model_response) != length(required_predictors) + 1L ||
+      model_response[1] != "is_chase_winner") {
+    stop(
+      "predict_live_win_prob: fitted model must predict the is_chase_winner target."
+    )
+  }
+
+  normalize_input <- function(value, name) {
+    if (!is.atomic(value) || length(value) != 1L || is.na(value)) {
+      stop("predict_live_win_prob: ", name, " must be a single finite number.", call. = FALSE)
+    }
+    normalized <- suppressWarnings(as.numeric(value))
+    if (is.na(normalized) || !is.finite(normalized)) {
+      stop("predict_live_win_prob: ", name, " must be a single finite number.", call. = FALSE)
+    }
+    normalized
+  }
+
+  target <- normalize_input(target, "target")
+  current_runs <- normalize_input(current_runs, "current_runs")
+  overs_bowled <- normalize_input(overs_bowled, "overs_bowled")
+  wickets_down <- normalize_input(wickets_down, "wickets_down")
+
+  if (target <= 0 || target > 300 || target != floor(target)) {
+    stop("predict_live_win_prob: target must be a whole-number score from 1 to 300.", call. = FALSE)
+  }
+  if (current_runs < 0 || current_runs >= target || current_runs != floor(current_runs)) {
+    stop("predict_live_win_prob: current_runs must be a whole number from 0 up to, but not including, target.", call. = FALSE)
+  }
+
+  overs_tenths <- round(overs_bowled * 10)
+  if (abs(overs_bowled * 10 - overs_tenths) > 1e-8 ||
+      overs_tenths < 0 || overs_tenths > 195 || overs_tenths %% 10 > 5) {
+    stop(
+      "predict_live_win_prob: overs_bowled must use valid cricket notation from 0.0 to 19.5.",
+      call. = FALSE
+    )
+  }
+
+  if (wickets_down < 0 || wickets_down > 9 || wickets_down != floor(wickets_down)) {
+    stop("predict_live_win_prob: wickets_down must be a whole number from 0 to 9.", call. = FALSE)
+  }
+
+  balls_bowled <- (overs_tenths %/% 10) * 6 + overs_tenths %% 10
+  balls_remaining <- 120 - balls_bowled
+  wickets_remaining <- 10 - wickets_down
+  runs_required <- target - current_runs
   req_rr <- ifelse(balls_remaining > 0, runs_required / (balls_remaining / 6), 30)
   current_rr <- ifelse(balls_bowled > 0, current_runs / (balls_bowled / 6), 0)
 
@@ -169,15 +252,29 @@ predict_live_win_prob <- function(target, current_runs, overs_bowled, wickets_do
     current_rr = current_rr
   )
 
-  log_odds <- predict(model, newdata = new_obs, type = "response")
-  chase_win_prob <- round(as.numeric(log_odds) * 100, 1)
-  chase_win_prob <- pmax(1, pmin(99, chase_win_prob))
-
-  defend_win_prob <- round(100 - chase_win_prob, 1)
+  chase_win_prob <- tryCatch(
+    as.numeric(stats::predict(model, newdata = new_obs, type = "response")),
+    error = function(error) {
+      stop(
+        "predict_live_win_prob: prediction failed: ",
+        conditionMessage(error),
+        call. = FALSE
+      )
+    }
+  )
+  if (length(chase_win_prob) != 1L ||
+      !is.finite(chase_win_prob) ||
+      chase_win_prob < 0 ||
+      chase_win_prob > 1) {
+    stop(
+      "predict_live_win_prob: model returned an invalid win probability.",
+      call. = FALSE
+    )
+  }
 
   return(list(
     chase_win_prob = chase_win_prob,
-    defend_win_prob = defend_win_prob,
+    defend_win_prob = 1 - chase_win_prob,
     runs_required = runs_required,
     balls_remaining = balls_remaining,
     req_rr = round(req_rr, 2),

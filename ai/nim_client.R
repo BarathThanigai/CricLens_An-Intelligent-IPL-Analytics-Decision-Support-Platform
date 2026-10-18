@@ -10,29 +10,69 @@ suppressMessages({
 .nim_client_state <- new.env(parent = emptyenv())
 .nim_client_state$missing_key_reported <- FALSE
 
-nim_client_status <- function() {
-  if (!nzchar(Sys.getenv("NVIDIA_API_KEY"))) {
-    return(
-      "NVIDIA NIM is disabled because NVIDIA_API_KEY is not set; deterministic R analytics remain available."
-    )
+sanitize_nim_error_body <- function(body, api_key, max_chars = 1200L) {
+  if (!is.character(body) || length(body) != 1L || is.na(body)) {
+    return("")
   }
 
-  "NVIDIA NIM is configured."
+  body <- gsub("[[:cntrl:]]+", " ", body)
+  body <- trimws(body)
+  if (nzchar(api_key)) {
+    body <- gsub(api_key, "[REDACTED]", body, fixed = TRUE)
+  }
+  body <- gsub(
+    "(?i)(\"?(?:authorization|api[_ -]?key|access[_ -]?token|token)\"?\\s*[:=]\\s*\"?)(?:bearer\\s+)?[^\\s,\"'}]+",
+    "\\1[REDACTED]",
+    body,
+    perl = TRUE
+  )
+  body <- gsub(
+    "(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*",
+    "Bearer [REDACTED]",
+    body,
+    perl = TRUE
+  )
+
+  if (nchar(body, type = "chars") > max_chars) {
+    body <- paste0(substr(body, 1L, max_chars), "...")
+  }
+
+  body
+}
+
+nim_client_status <- function() {
+  if (!nzchar(Sys.getenv("NVIDIA_API_KEY"))) {
+    return("Set NVIDIA_API_KEY in the server environment to enable NVIDIA NIM. Deterministic R analytics remain available.")
+  }
+
+  "Configured: NIM connectivity will be verified when you ask a question."
 }
 
 #' Call NVIDIA NIM API Endpoint
 #' @param prompt User prompt / messages to process
 #' @param system_prompt System prompt providing domain context and instructions
 #' @param model Model identifier
+#' @param status_callback Optional function called with status and user-safe message
 #' @return Natural language text response, or NULL when NIM is unavailable
 call_nvidia_nim <- function(
   prompt,
   system_prompt = "You are CricLens AI assistant.",
-  model = "meta/llama-3.1-70b-instruct"
+  model = "nvidia/nemotron-3.5-lightning-30b-a3b",
+  status_callback = NULL
 ) {
+  report_status <- function(status, message) {
+    if (is.function(status_callback)) {
+      status_callback(status, message)
+    }
+  }
+
   api_key <- Sys.getenv("NVIDIA_API_KEY")
 
   if (!nzchar(api_key)) {
+    report_status(
+      "not_configured",
+      "NVIDIA NIM is not configured. Set NVIDIA_API_KEY in the server environment; deterministic R analytics are still available."
+    )
     if (!isTRUE(.nim_client_state$missing_key_reported)) {
       message(nim_client_status())
       .nim_client_state$missing_key_reported <- TRUE
@@ -46,10 +86,14 @@ call_nvidia_nim <- function(
     ""
   }
   if (!nzchar(prompt)) {
-    message("NVIDIA NIM request skipped: prompt is empty or invalid.")
+    report_status(
+      "unavailable",
+      "NVIDIA NIM was not called because the request prompt was empty or invalid."
+    )
     return(NULL)
   }
 
+  report_status("checking", "Connecting to NVIDIA NIM...")
   url <- "https://integrate.api.nvidia.com/v1/chat/completions"
   body <- list(
     model = model,
@@ -70,10 +114,27 @@ call_nvidia_nim <- function(
       ),
       body = body,
       encode = "json",
-      timeout(15)
+      timeout(60)
     ),
     error = function(error) {
-      message("NVIDIA NIM request failed; using deterministic R fallback.")
+      request_error <- sanitize_nim_error_body(
+        conditionMessage(error),
+        api_key
+      )
+      diagnostic <- if (nzchar(request_error)) {
+        paste0("NVIDIA NIM request failed: ", request_error)
+      } else {
+        "NVIDIA NIM request failed with an empty or unreadable connection error."
+      }
+      diagnostic <- paste0(
+        diagnostic,
+        " Deterministic R parsing and analytics are being used."
+      )
+      report_status(
+        "unavailable",
+        diagnostic
+      )
+      message(diagnostic)
       NULL
     }
   )
@@ -83,17 +144,35 @@ call_nvidia_nim <- function(
   }
 
   if (status_code(response) != 200) {
-    message(
-      "NVIDIA NIM returned HTTP ",
-      status_code(response),
-      "; using deterministic R fallback."
+    http_status <- status_code(response)
+    response_body <- tryCatch(
+      content(response, as = "text", encoding = "UTF-8"),
+      error = function(error) ""
     )
+    diagnostic_body <- sanitize_nim_error_body(response_body, api_key)
+    diagnostic <- paste0("NVIDIA NIM returned HTTP ", http_status)
+    if (nzchar(diagnostic_body)) {
+      diagnostic <- paste0(diagnostic, ": ", diagnostic_body)
+    } else {
+      diagnostic <- paste0(diagnostic, ". The response body was empty or unreadable.")
+    }
+    diagnostic <- paste0(diagnostic, " Deterministic R parsing and analytics are being used.")
+
+    report_status(
+      "unavailable",
+      diagnostic
+    )
+    message(diagnostic)
     return(NULL)
   }
 
   parsed <- tryCatch(
     content(response, as = "parsed", encoding = "UTF-8"),
     error = function(error) {
+      report_status(
+        "unavailable",
+        "NVIDIA NIM returned an unreadable response. Deterministic R parsing and analytics are being used."
+      )
       message("NVIDIA NIM returned an unreadable response; using deterministic R fallback.")
       NULL
     }
@@ -105,6 +184,10 @@ call_nvidia_nim <- function(
       length(parsed$choices) == 0 ||
       !is.list(parsed$choices[[1]])
   ) {
+    report_status(
+      "unavailable",
+      "NVIDIA NIM returned an invalid response. Deterministic R parsing and analytics are being used."
+    )
     message("NVIDIA NIM response had no choices; using deterministic R fallback.")
     return(NULL)
   }
@@ -112,6 +195,10 @@ call_nvidia_nim <- function(
   choice <- parsed$choices[[1]]
   message_object <- choice$message
   if (!is.list(message_object)) {
+    report_status(
+      "unavailable",
+      "NVIDIA NIM returned an invalid response. Deterministic R parsing and analytics are being used."
+    )
     message("NVIDIA NIM response had no message object; using deterministic R fallback.")
     return(NULL)
   }
@@ -123,9 +210,17 @@ call_nvidia_nim <- function(
       is.na(message_content) ||
       !nzchar(trimws(message_content))
   ) {
+    report_status(
+      "unavailable",
+      "NVIDIA NIM returned an empty response. Deterministic R parsing and analytics are being used."
+    )
     message("NVIDIA NIM response contained no usable message; using deterministic R fallback.")
     return(NULL)
   }
 
+  report_status(
+    "connected",
+    "Connected: the latest NVIDIA NIM request succeeded. R remains the source of all statistics."
+  )
   message_content
 }

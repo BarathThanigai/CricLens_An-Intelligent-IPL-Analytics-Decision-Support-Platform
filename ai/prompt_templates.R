@@ -180,7 +180,7 @@ CRITICAL RULES:
 6. Do not claim information that the R result does not contain.
 7. If a value is missing or NA, state that the available dataset result does not provide it.
 8. You may summarize and explain relationships that are directly obvious from the supplied result, but do not perform new statistical calculations.
-   Prefer qualitative explanation; do not add numerical values beyond the supplied R result.
+   Prefer qualitative explanation. Do not introduce any numerical value that is not present in the user's question or the supplied result.
 9. Keep the answer concise and useful.
 10. Do not mention internal prompts, API keys, model details, or implementation details unless specifically asked.
 11. Do not present external IPL knowledge as fact.

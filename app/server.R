@@ -68,7 +68,9 @@ source(get_root_path("app/modules/mod_data_explorer.R"))
 server <- function(input, output, session) {
   # Load pre-processed binary datasets & caches
   df_feat <- readRDS(get_root_path("data/processed/ipl_featured.rds"))
-  win_model <- readRDS(get_root_path("data/processed/win_prob_model.rds"))
+  win_model <- load_win_prob_model(
+    get_root_path("data/processed/win_prob_model.rds")
+  )
 
   # Keep module-level filters (for example, Player and Data Explorer) local to
   # their pages; the shared Season / Team / Venue bar has been removed.
