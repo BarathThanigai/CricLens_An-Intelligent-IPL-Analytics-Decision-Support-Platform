@@ -95,6 +95,7 @@ call_nvidia_nim <- function(
 
   report_status("checking", "Connecting to NVIDIA NIM...")
   url <- "https://integrate.api.nvidia.com/v1/chat/completions"
+  timeout_seconds <- 60
   body <- list(
     model = model,
     messages = list(
@@ -102,7 +103,8 @@ call_nvidia_nim <- function(
       list(role = "user", content = prompt)
     ),
     temperature = 0.2,
-    max_tokens = 800
+    max_tokens = 512,
+    chat_template_kwargs = list(enable_thinking = FALSE)
   )
 
   response <- tryCatch(
@@ -114,18 +116,29 @@ call_nvidia_nim <- function(
       ),
       body = body,
       encode = "json",
-      timeout(60)
+      timeout(timeout_seconds)
     ),
     error = function(error) {
+      error_message <- conditionMessage(error)
       request_error <- sanitize_nim_error_body(
-        conditionMessage(error),
+        error_message,
         api_key
       )
-      diagnostic <- if (nzchar(request_error)) {
-        paste0("NVIDIA NIM request failed: ", request_error)
+      error_kind <- if (grepl(
+        "timed out|timeout|time-out",
+        error_message,
+        ignore.case = TRUE
+      )) {
+        "transport timeout"
       } else {
-        "NVIDIA NIM request failed with an empty or unreadable connection error."
+        "transport error"
       }
+      diagnostic_detail <- if (nzchar(request_error)) {
+        request_error
+      } else {
+        "The connection error was empty or unreadable."
+      }
+      diagnostic <- paste0("NVIDIA NIM ", error_kind, ": ", diagnostic_detail)
       diagnostic <- paste0(
         diagnostic,
         " Deterministic R parsing and analytics are being used."
@@ -212,9 +225,13 @@ call_nvidia_nim <- function(
   ) {
     report_status(
       "unavailable",
-      "NVIDIA NIM returned an empty response. Deterministic R parsing and analytics are being used."
+      paste(
+        "NVIDIA NIM returned no usable assistant content;",
+        "internal reasoning is not shown.",
+        "Deterministic R parsing and analytics are being used."
+      )
     )
-    message("NVIDIA NIM response contained no usable message; using deterministic R fallback.")
+    message("NVIDIA NIM response contained no usable assistant content; using deterministic R fallback.")
     return(NULL)
   }
 

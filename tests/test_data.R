@@ -410,6 +410,16 @@ call_nvidia_nim <- function(
   NULL
 }
 
+run_query_fixture <- function(query, data = df) {
+  parsed <- fallback_query_intent(query, data)
+  validated <- validate_intent(parsed, data)
+  list(
+    parsed = parsed,
+    validated = validated,
+    analytics = execute_r_analytics(validated, data)
+  )
+}
+
 query_res <- process_criclens_query(
   "Who has the most runs in IPL?",
   df
@@ -417,7 +427,19 @@ query_res <- process_criclens_query(
 
 verified_explanation_result <- list(
   intent = "player_profile",
-  result = data.frame(player = "V Kohli", total_runs = 9336)
+  result = data.frame(
+    player = "V Kohli",
+    matches = 275,
+    innings = 275,
+    total_runs = 9336,
+    average = 40.42,
+    strike_rate = 134.78,
+    highest_score = 113,
+    fours = 844,
+    sixes = 316,
+    fifties = 68,
+    hundreds = 9
+  )
 )
 stopifnot(
   explanation_numeric_values_are_supported(
@@ -427,6 +449,16 @@ stopifnot(
   ),
   !explanation_numeric_values_are_supported(
     "V Kohli scored 9,999 runs.",
+    "Show V Kohli stats",
+    verified_explanation_result
+  ),
+  explanation_numeric_values_are_supported(
+    "V Kohli's verified highest score was 113, with 68 fifties and 9 hundreds.",
+    "Show V Kohli stats",
+    verified_explanation_result
+  ),
+  !explanation_numeric_values_are_supported(
+    "V Kohli's highest score was 999, with 68 fifties.",
     "Show V Kohli stats",
     verified_explanation_result
   )
@@ -442,6 +474,78 @@ stopifnot(
 cat(
   "  [PASS] Supported query answered by deterministic R fallback.\n\n"
 )
+
+general_nim_calls <- 0L
+call_nvidia_nim <- function(...) {
+  general_nim_calls <<- general_nim_calls + 1L
+  NULL
+}
+greeting_response <- process_criclens_query("Hello!", df)
+general_help_response <- process_criclens_query("What can you do?", df)
+off_topic_response <- process_criclens_query("Tell me a joke.", df)
+stopifnot(
+  grepl("Hi!", greeting_response, fixed = TRUE),
+  grepl("IPL analytics assistant", general_help_response, fixed = TRUE),
+  grepl("focused on IPL analytics", off_topic_response, fixed = TRUE),
+  general_nim_calls == 0L
+)
+cat("  [PASS] General conversation is handled helpfully without NIM or dataset-only rejection.\n\n")
+
+probability_explanation <- paste(
+  "Explain why win probability changes during a chase."
+)
+nim_available_calls <- 0L
+call_nvidia_nim <- function(...) {
+  nim_available_calls <<- nim_available_calls + 1L
+  "A mocked explanation that is intentionally not needed."
+}
+probability_with_nim <- process_criclens_query(probability_explanation, df)
+call_nvidia_nim <- function(...) {
+  stop("NIM should not be required for this deterministic explanation.")
+}
+probability_without_nim <- process_criclens_query(probability_explanation, df)
+stopifnot(
+  grepl("runs required", probability_with_nim, fixed = TRUE),
+  grepl("balls remaining", probability_with_nim, fixed = TRUE),
+  grepl("wickets remaining", probability_with_nim, fixed = TRUE),
+  grepl("required run rate", probability_with_nim, fixed = TRUE),
+  grepl("current run rate", probability_with_nim, fixed = TRUE),
+  grepl("not explicit input features", probability_with_nim, fixed = TRUE),
+  identical(probability_with_nim, probability_without_nim),
+  nim_available_calls == 0L
+)
+cat("  [PASS] Win-probability explanation distinguishes model features and works with or without NIM.\n\n")
+
+verified_query <- "Compare Kohli and Rohit at Chepauk in IPL 2013"
+verified_fixture <- run_query_fixture(verified_query)
+nim_failure_cases <- list(
+  timeout = NULL,
+  malformed = '{"intent":',
+  empty = ""
+)
+for (failure_name in names(nim_failure_cases)) {
+  nim_failure_calls <- 0L
+  failure_response <- nim_failure_cases[[failure_name]]
+  call_nvidia_nim <- local({
+    response <- failure_response
+    function(...) {
+      nim_failure_calls <<- nim_failure_calls + 1L
+      response
+    }
+  })
+  fallback_response <- process_criclens_query(verified_query, df)
+  stopifnot(
+    grepl("V Kohli", fallback_response, fixed = TRUE),
+    grepl(as.character(verified_fixture$analytics$result$total_runs[1]),
+      fallback_response, fixed = TRUE),
+    grepl("Applied filters", fallback_response, fixed = TRUE),
+    grepl("calculated by CricLens R analytics", fallback_response, fixed = TRUE),
+    !grepl('{"intent":', fallback_response, fixed = TRUE),
+    identical(nim_failure_calls, 1L)
+  )
+}
+call_nvidia_nim <- function(...) NULL
+cat("  [PASS] Timeout, malformed and empty NIM explanations preserve verified R results with one NIM call maximum.\n\n")
 
 
 # Test 7A: Full Player Name Resolves to Dataset Name
@@ -766,7 +870,8 @@ prediction_explanation_query <- process_criclens_query(
 )
 stopifnot(
   identical(empty_query, "Please enter a question."),
-  grepl("can't answer", unsupported_query, ignore.case = TRUE),
+  grepl("focused on IPL analytics", unsupported_query, fixed = TRUE),
+  !grepl("can't answer", unsupported_query, ignore.case = TRUE),
   grepl("team chasing the target", prediction_explanation_query, fixed = TRUE),
   grepl("complement", prediction_explanation_query, fixed = TRUE),
   grepl("not a guarantee", prediction_explanation_query, fixed = TRUE),
@@ -852,6 +957,485 @@ stopifnot(
     season_comparison_result$result$total_runs,
     expected_season_profiles$total_runs
   ))
+)
+
+chepauk_query <- "Compare Kohli and Rohit in Chepauk"
+chepauk_parsed <- fallback_query_intent(chepauk_query, df)
+chepauk_spec <- chepauk_parsed$query_spec
+chepauk_validated <- validate_intent(chepauk_parsed, df)
+validated_chepauk_spec <- chepauk_validated$query_spec
+chepauk_result <- execute_r_analytics(chepauk_validated, df)
+chepauk_rows <- df %>%
+  filter(.data$canonical_venue == "MA Chidambaram Stadium, Chepauk")
+chepauk_expected <- dplyr::bind_rows(
+  get_player_batting_profile(chepauk_rows, "V Kohli"),
+  get_player_batting_profile(chepauk_rows, "RG Sharma")
+)
+stopifnot(
+  chepauk_parsed$intent == "player_comparison",
+  chepauk_result$intent == "player_comparison",
+  isTRUE(all.equal(
+    chepauk_result$result$total_runs,
+    chepauk_expected$total_runs
+  )),
+  "venue" %in% chepauk_result$scope$filters,
+  setequal(chepauk_spec$players$value, c("V Kohli", "RG Sharma")),
+  chepauk_spec$players$status == "explicit",
+  identical(chepauk_spec$players$source, "user_query"),
+  identical(chepauk_spec$venue$value, "MA Chidambaram Stadium, Chepauk"),
+  chepauk_spec$venue$status == "explicit",
+  chepauk_spec$venue$validation == "pending",
+  validated_chepauk_spec$venue$validation == "valid",
+  identical(chepauk_spec$season$status, "not_requested"),
+  identical(chepauk_spec$innings$status, "not_requested"),
+  identical(chepauk_spec$date_range$status, "not_requested")
+)
+
+overall_comparison <- run_query_fixture("Compare Kohli and Rohit")
+overall_expected <- dplyr::bind_rows(
+  get_player_batting_profile(df, "V Kohli"),
+  get_player_batting_profile(df, "RG Sharma")
+)
+stopifnot(
+  overall_comparison$analytics$intent == "player_comparison",
+  !length(overall_comparison$analytics$scope$filters),
+  identical(
+    overall_comparison$analytics$result$total_runs,
+    overall_expected$total_runs
+  )
+)
+
+chepauk_phrasing_tests <- lapply(
+  c(
+    "Compare Kohli and Rohit in Chepauk",
+    "Compare Kohli and Rohit at Chepauk"
+  ),
+  run_query_fixture
+)
+stopifnot(all(vapply(chepauk_phrasing_tests, function(fixture) {
+  identical(fixture$analytics$intent, "player_comparison") &&
+    identical(
+      fixture$analytics$result$total_runs,
+      chepauk_expected$total_runs
+    ) &&
+    fixture$analytics$scope$record_count == nrow(chepauk_rows)
+}, logical(1))))
+
+alias_season_query <- paste(
+  "Compare Virat Kohli and Rohit Sharma at Chepauk",
+  "in IPL 2013"
+)
+alias_season_fixture <- run_query_fixture(alias_season_query)
+alias_season_rows <- df %>%
+  filter(
+    .data$canonical_venue == "MA Chidambaram Stadium, Chepauk",
+    .data$season_year == 2013
+  )
+alias_season_expected <- dplyr::bind_rows(
+  get_player_batting_profile(alias_season_rows, "V Kohli"),
+  get_player_batting_profile(alias_season_rows, "RG Sharma")
+)
+stopifnot(
+  alias_season_fixture$analytics$intent == "player_comparison",
+  setequal(alias_season_fixture$validated$query_spec$players$value,
+    c("V Kohli", "RG Sharma")),
+  alias_season_fixture$validated$query_spec$venue$value ==
+    "MA Chidambaram Stadium, Chepauk",
+  alias_season_fixture$validated$query_spec$season$value == "2013",
+  alias_season_fixture$analytics$scope$record_count == nrow(alias_season_rows),
+  identical(
+    alias_season_fixture$analytics$result$total_runs,
+    alias_season_expected$total_runs
+  ),
+  identical(
+    alias_season_fixture$analytics$result$balls_faced,
+    alias_season_expected$balls_faced
+  )
+)
+
+chepauk_2024_queries <- c(
+  "Compare Kohli and Rohit in Chepauk in 2024",
+  "Compare Kohli and Rohit at Chepauk during 2024"
+)
+chepauk_2024_rows <- df %>%
+  filter(
+    .data$canonical_venue == "MA Chidambaram Stadium, Chepauk",
+    .data$season_year == 2024
+  )
+chepauk_2024_expected_players <- unique(
+  chepauk_2024_rows$batter[chepauk_2024_rows$batter %in% c("V Kohli", "RG Sharma")]
+)
+chepauk_2024_fixtures <- lapply(chepauk_2024_queries, run_query_fixture)
+chepauk_2024_responses <- vapply(
+  chepauk_2024_queries,
+  process_criclens_query,
+  character(1),
+  df = df
+)
+stopifnot(
+  all(vapply(chepauk_2024_fixtures, function(fixture) {
+    fixture$parsed$intent == "player_comparison" &&
+      setequal(fixture$validated$query_spec$players$value, c("V Kohli", "RG Sharma")) &&
+      identical(
+        fixture$validated$query_spec$venue$value,
+        "MA Chidambaram Stadium, Chepauk"
+      ) &&
+      identical(fixture$validated$query_spec$season$value, "2024") &&
+      fixture$analytics$intent == "unsupported" &&
+      identical(fixture$analytics$scope$record_count, nrow(chepauk_2024_rows)) &&
+      identical(
+        fixture$analytics$scope$filters,
+        c("venue", "season")
+      ) &&
+      identical(
+        chepauk_2024_expected_players,
+        "V Kohli"
+      ) &&
+      grepl("RG Sharma", fixture$analytics$reason, fixed = TRUE) &&
+      grepl("Season: 2024", fixture$analytics$reason, fixed = TRUE)
+  }, logical(1))),
+  all(grepl("No batting records", chepauk_2024_responses, fixed = TRUE)),
+  all(grepl("Season: 2024", chepauk_2024_responses, fixed = TRUE)),
+  !any(grepl("focused on IPL analytics", chepauk_2024_responses, fixed = TRUE))
+)
+
+chinnaswamy_matchup_query <- paste(
+  "Kohli in Chinnaswamy stadium against left arm spinners"
+)
+chinnaswamy_matchup <- run_query_fixture(chinnaswamy_matchup_query)
+chinnaswamy_style_columns <- grep(
+  "bowling_style|bowler_style|bowling_type|bowler_type|handedness|arm_type|spin_type",
+  names(df),
+  value = TRUE,
+  ignore.case = TRUE
+)
+stopifnot(
+  chinnaswamy_matchup$parsed$intent == "player_profile",
+  identical(chinnaswamy_matchup$validated$query_spec$players$value, "V Kohli"),
+  identical(
+    chinnaswamy_matchup$validated$query_spec$venue$value,
+    "M. Chinnaswamy Stadium"
+  ),
+  chinnaswamy_matchup$validated$query_spec$bowling_style$status == "unsupported",
+  chinnaswamy_matchup$analytics$intent == "unsupported",
+  length(chinnaswamy_style_columns) == 0L,
+  grepl("no verified bowler handedness", chinnaswamy_matchup$analytics$reason, fixed = TRUE),
+  grepl("M. Chinnaswamy Stadium", chinnaswamy_matchup$analytics$reason, fixed = TRUE),
+  !grepl("other player", chinnaswamy_matchup$analytics$reason, ignore.case = TRUE)
+)
+
+independent_extra_batting_metrics <- function(data, player) {
+  player_rows <- data %>%
+    filter(.data$batter == player, .data$innings %in% c(1, 2))
+  scores <- player_rows %>%
+    group_by(.data$match_id) %>%
+    summarise(score = sum(.data$runs_batter, na.rm = TRUE), .groups = "drop") %>%
+    pull(.data$score)
+  c(
+    highest_score = max(scores),
+    fifties = sum(scores >= 50 & scores < 100),
+    hundreds = sum(scores >= 100)
+  )
+}
+for (fixture in list(overall_comparison, chepauk_phrasing_tests[[1]])) {
+  result <- fixture$analytics$result
+  for (player in result$player) {
+    expected_metrics <- independent_extra_batting_metrics(
+      if ("venue" %in% fixture$analytics$scope$filters) chepauk_rows else df,
+      player
+    )
+    actual_metrics <- unlist(result[result$player == player, names(expected_metrics)])
+    stopifnot(isTRUE(all.equal(as.numeric(actual_metrics), as.numeric(expected_metrics))))
+  }
+  formatted_comparison <- format_r_result(fixture$analytics)
+  stopifnot(
+    grepl("Highest Score", formatted_comparison, fixed = TRUE),
+    grepl("| 50s | 100s |", formatted_comparison, fixed = TRUE)
+  )
+}
+
+invented_explanation <- "Kohli had 987654 runs, 900 fifties, and 800 hundreds."
+stopifnot(
+  !explanation_numeric_values_are_supported(
+    invented_explanation,
+    "Compare Kohli and Rohit",
+    overall_comparison$analytics
+  ),
+  !explanation_numeric_values_are_supported(
+    invented_explanation,
+    "Compare Kohli and Rohit in Chepauk",
+    chepauk_phrasing_tests[[1]]$analytics
+  ),
+  !explanation_numeric_values_are_supported(
+    "V Kohli scored 50 fifties and 100 hundreds.",
+    "Compare Kohli and Rohit",
+    overall_comparison$analytics
+  ),
+  explanation_numeric_values_are_supported(
+    "Kohli's verified highest score is 113, with 68 fifties and 9 hundreds.",
+    "Compare Kohli and Rohit",
+    overall_comparison$analytics
+  )
+)
+
+for (query in c("Compare Kohli and Rohit", "Compare Kohli and Rohit in Chepauk")) {
+  call_nvidia_nim <- function(...) invented_explanation
+  protected_response <- process_criclens_query(query, df)
+  stopifnot(
+    grepl("Highest Score", protected_response, fixed = TRUE),
+    !grepl("987654", protected_response, fixed = TRUE),
+    !grepl("900 fifties", protected_response, fixed = TRUE)
+  )
+}
+call_nvidia_nim <- function(...) NULL
+
+model_inferred_spec <- new_query_representation(
+  list(
+    intent = "player_comparison",
+    parameters = list(
+      player1 = "V Kohli",
+      player2 = "RG Sharma",
+      venue_name = "MA Chidambaram Stadium, Chepauk",
+      season = "2024"
+    )
+  ),
+  query = "Compare Kohli and Rohit",
+  df = df,
+  intent_source = "model"
+)
+validated_model_inferred_spec <- validate_query_representation(
+  model_inferred_spec,
+  df
+)
+stopifnot(
+  model_inferred_spec$venue$status == "inferred",
+  model_inferred_spec$venue$source == "model",
+  model_inferred_spec$venue$validation == "pending",
+  validated_model_inferred_spec$venue$status == "inferred",
+  validated_model_inferred_spec$venue$validation == "valid",
+  model_inferred_spec$season$status == "inferred",
+  model_inferred_spec$season$validation == "pending"
+)
+
+original_query_spec_nim <- call_nvidia_nim
+call_nvidia_nim <- function(...) {
+  '{"intent":"top_batters","parameters":{"top_n":5,"metric":"runs"}}'
+}
+nim_query_spec <- parse_query_intent(
+  "Top run scorers in Chepauk",
+  df
+)
+call_nvidia_nim <- original_query_spec_nim
+
+date_range_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Top runs between 2024-04-01 and 2024-05-31",
+  df = df
+)
+invalid_date_range_spec <- validate_query_representation(
+  new_query_representation(
+    list(intent = "top_batters", parameters = list()),
+    query = "Top runs between 2007-04-01 and 2027-05-31",
+    df = df
+  ),
+  df
+)
+innings_phase_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Top runs in innings 2 during the powerplay",
+  df = df
+)
+unsupported_innings_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Top runs in an innings",
+  df = df
+)
+first_innings_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Top runs in the first innings",
+  df = df
+)
+all_seasons_spec <- new_query_representation(
+  list(intent = "team_trend", parameters = list()),
+  query = "Team performance across all seasons",
+  df = df
+)
+relative_season_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Top runs this season",
+  df = df
+)
+unparsed_date_range_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Top runs from April through June 2024",
+  df = df
+)
+unsupported_metric_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Show dot-ball percentage",
+  df = df
+)
+ambiguous_venue_spec <- new_query_representation(
+  list(intent = "venue_stats", parameters = list()),
+  query = "Show venue stats in Mumbai",
+  df = df
+)
+unscoped_leaderboard_spec <- new_query_representation(
+  list(intent = "top_batters", parameters = list()),
+  query = "Who scored the most runs?",
+  df = df
+)
+unscoped_team_ranking_spec <- new_query_representation(
+  list(intent = "team_summary", parameters = list()),
+  query = "Which team has the most wins?",
+  df = df
+)
+team_scoped_query_spec <- new_query_representation(
+  list(intent = "team_summary", parameters = list()),
+  query = "Show performance in Mumbai Indians",
+  df = df
+)
+stopifnot(
+  nim_query_spec$intent == "top_batters",
+  identical(nim_query_spec$query_spec$venue$value, "MA Chidambaram Stadium, Chepauk"),
+  nim_query_spec$query_spec$venue$status == "explicit",
+  nim_query_spec$query_spec$venue$source == "user_query",
+  identical(date_range_spec$date_range$value, c("2024-04-01", "2024-05-31")),
+  date_range_spec$date_range$status == "explicit",
+  date_range_spec$season$status == "not_requested",
+  invalid_date_range_spec$date_range$status == "unsupported",
+  innings_phase_spec$innings$value == 2L,
+  innings_phase_spec$innings$status == "explicit",
+  first_innings_spec$innings$value == 1L,
+  first_innings_spec$innings$status == "explicit",
+  identical(all_seasons_spec$season_range$value, c("2008", "2026")),
+  all_seasons_spec$season_range$status == "explicit",
+  relative_season_spec$season$status == "unsupported",
+  identical(innings_phase_spec$match_phase$value, "Powerplay"),
+  innings_phase_spec$match_phase$validation == "pending",
+  unsupported_innings_spec$innings$status == "unsupported",
+  unparsed_date_range_spec$date_range$status == "unsupported",
+  unsupported_metric_spec$requested_metrics$status == "unsupported",
+  ambiguous_venue_spec$venue$status == "ambiguous",
+  length(ambiguous_venue_spec$venue$value) > 1L,
+  unscoped_leaderboard_spec$players$status == "not_requested",
+  unscoped_team_ranking_spec$teams$status == "not_requested",
+  team_scoped_query_spec$teams$value == "Mumbai Indians",
+  team_scoped_query_spec$venue$status == "not_requested"
+)
+
+combined_filter_query <- paste(
+  "Compare Kohli and Rohit in Chepauk in IPL 2013",
+  "in innings 1 during the powerplay"
+)
+combined_filter_parsed <- fallback_query_intent(combined_filter_query, df)
+combined_filter_validated <- validate_intent(combined_filter_parsed, df)
+combined_filter_result <- execute_r_analytics(combined_filter_validated, df)
+combined_filter_rows <- df %>%
+  filter(
+    .data$canonical_venue == "MA Chidambaram Stadium, Chepauk",
+    .data$season_year == 2013,
+    .data$innings == 1,
+    .data$match_phase == "Powerplay"
+  )
+combined_filter_expected <- dplyr::bind_rows(
+  get_player_batting_profile(combined_filter_rows, "V Kohli"),
+  get_player_batting_profile(combined_filter_rows, "RG Sharma")
+)
+stopifnot(
+  combined_filter_parsed$intent == "player_comparison",
+  combined_filter_result$intent == "player_comparison",
+  setequal(
+    combined_filter_result$result$player,
+    c("V Kohli", "RG Sharma")
+  ),
+  isTRUE(all.equal(
+    combined_filter_result$result$total_runs,
+    combined_filter_expected$total_runs
+  )),
+  isTRUE(all.equal(
+    combined_filter_result$result$balls_faced,
+    combined_filter_expected$balls_faced
+  )),
+  isTRUE(all.equal(
+    combined_filter_result$result$strike_rate,
+    combined_filter_expected$strike_rate
+  )),
+  setequal(
+    combined_filter_result$scope$filters,
+    c("venue", "season", "innings", "match phase")
+  ),
+  combined_filter_result$scope$record_count == nrow(combined_filter_rows),
+  grepl(
+    "Applied filters: Players: V Kohli, RG Sharma; Venue:",
+    format_query_scope(combined_filter_validated$query_spec),
+    fixed = TRUE
+  )
+)
+
+date_scoped_query <- fallback_query_intent(
+  "Compare Kohli and Rohit between 2024-04-01 and 2024-05-31",
+  df
+)
+date_scoped_validated <- validate_intent(date_scoped_query, df)
+date_scoped_result <- execute_r_analytics(date_scoped_validated, df)
+date_scoped_rows <- df %>%
+  filter(
+    .data$date >= as.Date("2024-04-01"),
+    .data$date <= as.Date("2024-05-31")
+  )
+date_scoped_expected <- dplyr::bind_rows(
+  get_player_batting_profile(date_scoped_rows, "V Kohli"),
+  get_player_batting_profile(date_scoped_rows, "RG Sharma")
+)
+stopifnot(
+  isTRUE(all.equal(
+    date_scoped_result$result$total_runs,
+    date_scoped_expected$total_runs
+  )),
+  "date range" %in% date_scoped_result$scope$filters
+)
+
+invalid_scope_query <- fallback_query_intent(
+  "Compare Kohli and Rohit between 2007-04-01 and 2024-05-31",
+  df
+)
+invalid_scope_result <- execute_r_analytics(
+  validate_intent(invalid_scope_query, df),
+  df
+)
+unsupported_metric_result <- execute_r_analytics(
+  validate_intent(
+    fallback_query_intent("Show dot-ball percentage", df),
+    df
+  ),
+  df
+)
+stopifnot(
+  invalid_scope_result$intent == "unsupported",
+  grepl("date range", invalid_scope_result$reason, ignore.case = TRUE),
+  unsupported_metric_result$intent == "unsupported",
+  grepl("metric", unsupported_metric_result$reason, ignore.case = TRUE)
+)
+
+unknown_player_query <- run_query_fixture(
+  "Compare Unknown Cricketer and Rohit at Chepauk"
+)
+unknown_venue_query <- run_query_fixture(
+  "Compare Kohli and Rohit at Atlantis Stadium"
+)
+empty_valid_scope_query <- run_query_fixture(
+  "Compare Kohli and Rohit at Chepauk in IPL 2020"
+)
+stopifnot(
+  unknown_player_query$analytics$intent == "unsupported",
+  grepl("player", unknown_player_query$analytics$reason, ignore.case = TRUE),
+  unknown_venue_query$analytics$intent == "unsupported",
+  grepl("venue", unknown_venue_query$analytics$reason, ignore.case = TRUE),
+  empty_valid_scope_query$validated$query_spec$venue$validation == "valid",
+  empty_valid_scope_query$validated$query_spec$season$validation == "valid",
+  empty_valid_scope_query$analytics$intent == "unsupported",
+  grepl("No dataset records match", empty_valid_scope_query$analytics$reason, fixed = TRUE)
 )
 
 kohli_history_intent <- fallback_query_intent(
@@ -1059,7 +1643,7 @@ shiny::testServer(
 )
 stopifnot(
   grepl("Top Run Scorers", first_session_chat, fixed = TRUE),
-  grepl("can't answer", second_session_chat, ignore.case = TRUE),
+  grepl("What would you like to know", second_session_chat, fixed = TRUE),
   grepl(
     if (nzchar(Sys.getenv("NVIDIA_API_KEY"))) "Configured" else "Not configured",
     nim_status_message,
@@ -1223,11 +1807,45 @@ stopifnot(
   any(vapply(timeout_nim_events, function(event) {
     identical(event$status, "unavailable")
   }, logical(1))),
+  any(grepl("transport error", timeout_nim_diagnostic, fixed = TRUE)),
   any(grepl("Could not resolve api.nvidia.com", timeout_nim_diagnostic, fixed = TRUE)),
   !any(grepl("test-only-key", timeout_nim_diagnostic, fixed = TRUE)),
   !any(grepl("test-only-key", timeout_nim_logs, fixed = TRUE))
 )
-cat("  [PASS] Connection failures expose a sanitized diagnostic and use deterministic fallback.\n\n")
+cat("  [PASS] Transport failures are distinguished from HTTP failures and use sanitized deterministic fallback.\n\n")
+
+nim_test_env$POST <- function(...) {
+  stop(paste(
+    "Operation timed out after 60014 milliseconds with 0 bytes received.",
+    "Authorization: Bearer test-only-key"
+  ))
+}
+timeout_response_events <- list()
+timeout_response_logs <- capture.output(
+  timeout_response_result <- nim_test_env$call_nvidia_nim(
+    "test",
+    "test system prompt",
+    status_callback = function(status, message) {
+      timeout_response_events[[length(timeout_response_events) + 1L]] <<-
+        list(status = status, message = message)
+    }
+  ),
+  type = "message"
+)
+timeout_response_diagnostic <- vapply(
+  timeout_response_events,
+  `[[`,
+  character(1),
+  "message"
+)
+stopifnot(
+  is.null(timeout_response_result),
+  any(grepl("transport timeout", timeout_response_diagnostic, fixed = TRUE)),
+  any(grepl("60014 milliseconds", timeout_response_diagnostic, fixed = TRUE)),
+  !any(grepl("test-only-key", timeout_response_diagnostic, fixed = TRUE)),
+  !any(grepl("test-only-key", timeout_response_logs, fixed = TRUE))
+)
+cat("  [PASS] Transport timeouts are explicitly diagnosed without exposing credentials.\n\n")
 
 cat("Test 7G: Validating NIM-disabled diagnostics...\n")
 stopifnot(grepl(
@@ -1257,7 +1875,9 @@ nim_test_env$Sys.getenv <- function(name, unset = "") {
 nim_test_env$POST <- function(url, ..., body, encode, config) {
   stopifnot(
     identical(url, "https://integrate.api.nvidia.com/v1/chat/completions"),
-    identical(body$model, "nvidia/nemotron-3.5-lightning-30b-a3b")
+    identical(body$model, "nvidia/nemotron-3.5-lightning-30b-a3b"),
+    identical(body$max_tokens, 512),
+    identical(body$chat_template_kwargs, list(enable_thinking = FALSE))
   )
   structure(list(), class = "mock_response")
 }
@@ -1282,6 +1902,41 @@ stopifnot(
 )
 cat("  [PASS] Configured NIM uses the project endpoint/model and reports successful connectivity (mocked HTTP).\n\n")
 
+cat("Test 7H: Validating reasoning-only response fallback...\n")
+nim_test_env$content <- function(...) {
+  list(choices = list(list(message = list(
+    content = NULL,
+    reasoning_content = "Private internal reasoning."
+  ))))
+}
+empty_content_events <- list()
+empty_content_logs <- capture.output(
+  empty_content_result <- nim_test_env$call_nvidia_nim(
+    "test",
+    "test system prompt",
+    status_callback = function(status, message) {
+      empty_content_events[[length(empty_content_events) + 1L]] <<-
+        list(status = status, message = message)
+    }
+  ),
+  type = "message"
+)
+empty_content_diagnostics <- vapply(
+  empty_content_events,
+  `[[`,
+  character(1),
+  "message"
+)
+stopifnot(
+  is.null(empty_content_result),
+  any(vapply(empty_content_events, function(event) {
+    identical(event$status, "unavailable")
+  }, logical(1))),
+  any(grepl("no usable assistant content", empty_content_diagnostics, fixed = TRUE)),
+  !any(grepl("Private internal reasoning", empty_content_diagnostics, fixed = TRUE)),
+  !any(grepl("Private internal reasoning", empty_content_logs, fixed = TRUE))
+)
+cat("  [PASS] Reasoning-only response is not exposed and returns NULL for deterministic fallback (mocked HTTP).\n\n")
 
 cat("=====================================================\n")
 cat("  ALL TEST SUITES PASSED WITH 100% SUCCESS!         \n")

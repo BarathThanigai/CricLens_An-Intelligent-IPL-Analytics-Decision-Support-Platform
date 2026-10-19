@@ -149,7 +149,7 @@ Rscript tests/test_data.R
 
 ## AI & Safety Directives
 - **R is the Single Source of Truth**: All statistical metrics are strictly calculated by R scripts.
-- **NVIDIA NIM Integration**: NVIDIA NIM API is used solely for natural-language query interpretation and explaining R-calculated results.
+- **NVIDIA NIM Integration**: Deterministic R intent parsing runs first. NVIDIA NIM is used only to interpret unresolved IPL analytics queries or explain verified R-calculated results; a query uses at most one NIM request.
 - **Secrets Management**: Set `NVIDIA_API_KEY` in environment variables or `.Renviron`. Never commit API keys to version control.
 
 ### Configuring NVIDIA NIM
@@ -160,6 +160,6 @@ Set `NVIDIA_API_KEY` in the environment of the R process running Shiny, or add i
 NVIDIA_API_KEY=your_nvidia_api_key
 ```
 
-Restart R after changing `.Renviron` so the server process can read it. The Ask CricLens tab shows whether NIM is configured, connecting, connected after a successful request, or temporarily unavailable. Use **Refresh connection status** to re-read the server process's current environment. The key is never sent to the browser; when it is missing or NIM fails, queries continue through deterministic R intent parsing and analytics.
+Restart R after changing `.Renviron` so the server process can read it. The Ask CricLens tab shows whether NIM is configured, connecting, connected after a successful request, or temporarily unavailable. Use **Refresh connection status** to re-read the server process's current environment. The key is never sent to the browser. Deterministic R analytics proceed without waiting for NIM when the query parser can resolve the request; a failed explanation never replaces or discards the verified R result.
 
-NIM requests use NVIDIA's chat completions endpoint and the configured `nvidia/nemotron-3.5-lightning-30b-a3b` model. NIM interprets questions and may explain verified results; all statistics are calculated by R from the processed IPL dataset.
+NIM requests use NVIDIA's chat completions endpoint and the configured `nvidia/nemotron-3.5-lightning-30b-a3b` model. They allow up to 512 answer tokens and disable internal reasoning using the model's documented [`chat_template_kwargs.enable_thinking` setting](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-5-lightning-30b-a3b-infer). Only non-empty assistant `message.content` is shown; reasoning content is never used as an answer. NIM may interpret a query only when deterministic routing cannot resolve an IPL analytics request, or explain a verified result, but the app makes no sequential interpretation-and-explanation calls for one query. If NIM fails, deterministic analytics and explanations remain authoritative. Greetings, help requests, and general conversation receive a helpful CricLens response rather than an IPL-dataset error. All statistics are calculated by R from the processed IPL dataset.

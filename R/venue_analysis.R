@@ -39,9 +39,17 @@ get_venue_profile <- function(
     selected_venue
 ) {
 
+  venue_column <- if (
+    "canonical_venue" %in% names(df) &&
+      selected_venue %in% df$canonical_venue
+  ) {
+    "canonical_venue"
+  } else {
+    "venue"
+  }
   v_balls <- df %>%
     filter(
-      venue == selected_venue
+      .data[[venue_column]] == selected_venue
     )
 
   if (nrow(v_balls) == 0) {

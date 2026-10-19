@@ -6,9 +6,9 @@
 #
 # User query
 #     ↓
-# NVIDIA NIM intent parsing
+# Deterministic intent parsing / parameter extraction
 #     ↓
-# Deterministic validation / parameter extraction
+# NVIDIA NIM intent parsing only when deterministic routing cannot resolve
 #     ↓
 # R analytics functions
 #     ↓
@@ -661,7 +661,7 @@ extract_query_season <- function(
   # Extract four-digit year candidates from the user's query.
   year_matches <- str_extract_all(
     query,
-    "\\b20[0-9]{2}\\b"
+    "\\b20[0-9]{2}\\b(?!-[0-9]{2}-[0-9]{2})"
   )[[1]]
 
   if (length(year_matches) == 0) {
@@ -693,6 +693,598 @@ extract_query_season <- function(
   # Return the first valid season mentioned.
   as.character(
     valid_matches[1]
+  )
+}
+
+query_constraint <- function(
+  value = NULL,
+  status = NULL,
+  source = NULL,
+  validation = NULL,
+  raw = NULL,
+  reason = NULL
+) {
+  if (length(value) == 0L) {
+    value <- NULL
+  }
+  if (is.null(status)) {
+    status <- if (is.null(value)) "not_requested" else "inferred"
+  }
+  if (is.null(source)) {
+    source <- if (identical(status, "not_requested")) "none" else "model"
+  }
+  if (is.null(validation)) {
+    validation <- if (status %in% c("explicit", "inferred")) {
+      "pending"
+    } else {
+      "not_applicable"
+    }
+  }
+
+  list(
+    value = value,
+    status = status,
+    source = source,
+    validation = validation,
+    raw = raw,
+    reason = reason
+  )
+}
+
+query_parameter_values <- function(parameters, names) {
+  values <- unlist(
+    lapply(names, function(name) parameters[[name]]),
+    use.names = FALSE
+  )
+  values <- as.character(values)
+  values[!is.na(values) & nzchar(trimws(values))]
+}
+
+extract_query_venues <- function(query, df) {
+  query <- safe_character(query, default = "")
+  if (!nzchar(query)) {
+    return(character())
+  }
+
+  available <- get_dataset_venues(df)
+  query_lower <- tolower(query)
+  query_words <- str_split(query_lower, "[^[:alnum:]]+")[[1]]
+  entity_names <- c(
+    extract_player_matches(query, get_dataset_players(df)),
+    extract_team_matches(query, get_dataset_teams(df))
+  )
+  entity_words <- str_split(
+    tolower(paste(entity_names, collapse = " ")),
+    "[^[:alnum:]]+"
+  )[[1]]
+  query_words <- setdiff(query_words, entity_words)
+  generic_venue_words <- c(
+    "stadium", "cricket", "international", "ground", "stadia",
+    "sports", "academy", "park", "oval", "arena"
+  )
+
+  explicit_full_matches <- available[vapply(available, function(venue) {
+    str_detect(query_lower, fixed(tolower(venue)))
+  }, logical(1))]
+  if (length(explicit_full_matches)) {
+    return(explicit_full_matches)
+  }
+
+  if ("city" %in% names(df) && "venue" %in% names(df)) {
+    city_values <- unique(as.character(df$city[!is.na(df$city)]))
+    mentioned_cities <- city_values[vapply(city_values, function(city) {
+      city_words <- str_split(tolower(city), "[^[:alnum:]]+")[[1]]
+      city_words <- city_words[nchar(city_words) >= 3]
+      any(city_words %in% query_words)
+    }, logical(1))]
+    if (length(mentioned_cities)) {
+      city_venues <- unique(as.character(
+        df$venue[df$city %in% mentioned_cities]
+      ))
+      city_venues <- city_venues[
+        !is.na(city_venues) & nzchar(city_venues)
+      ]
+      if (length(city_venues)) {
+        return(city_venues)
+      }
+    }
+  }
+
+  if (!str_detect(
+    query_lower,
+    regex("\\b(at|venue|stadium|ground)\\b|\\bin\\s+(?!ipl\\b|20[0-9]{2}\\b)")
+  )) {
+    return(character())
+  }
+
+  available[vapply(available, function(venue) {
+    venue_lower <- tolower(venue)
+    venue_words <- str_split(venue_lower, "[^[:alnum:]]+")[[1]]
+    venue_words <- venue_words[
+      nchar(venue_words) >= 4 &
+        !venue_words %in% generic_venue_words
+    ]
+    any(venue_words %in% query_words)
+  }, logical(1))]
+}
+
+extract_query_innings <- function(query) {
+  query_lower <- tolower(query)
+  if (str_detect(query_lower, regex("\\bsuper[- ]overs?\\b"))) {
+    return(list(value = "super_over", raw = "Super Over"))
+  }
+
+  innings_match <- str_match(
+    query_lower,
+    "\\binnings?\\s*(?:no\\.?\\s*)?([1-6])\\b|\\b([1-6])(st|nd|rd|th)?\\s+innings?\\b|\\b(first|second|third|fourth|fifth|sixth)\\s+innings?\\b"
+  )
+  if (!is.na(innings_match[1, 2])) {
+    return(list(value = as.integer(innings_match[1, 2]), raw = innings_match[1]))
+  }
+  if (!is.na(innings_match[1, 3])) {
+    return(list(value = as.integer(innings_match[1, 3]), raw = innings_match[1]))
+  }
+  if (!is.na(innings_match[1, 5])) {
+    ordinal <- c(
+      first = 1L,
+      second = 2L,
+      third = 3L,
+      fourth = 4L,
+      fifth = 5L,
+      sixth = 6L
+    )
+    value <- unname(ordinal[innings_match[1, 5]])
+    return(list(value = value, raw = innings_match[1]))
+  }
+
+  if (str_detect(query_lower, regex("\\binnings?\\b"))) {
+    return(list(value = NULL, raw = "innings"))
+  }
+  NULL
+}
+
+new_query_representation <- function(
+  parsed,
+  query = NULL,
+  df = NULL,
+  intent_source = "model"
+) {
+  if (!is.list(parsed)) {
+    parsed <- list()
+  }
+  parameters <- parsed$parameters
+  if (!is.list(parameters)) {
+    parameters <- list()
+  }
+
+  query <- safe_character(query, default = "")
+  query_lower <- tolower(query)
+  explicit_players <- explicit_teams <- explicit_venues <- character()
+  explicit_years <- integer()
+
+  if (!is.null(df) && nzchar(query)) {
+    explicit_players <- extract_player_matches(query, get_dataset_players(df))
+    explicit_teams <- extract_team_matches(query, get_dataset_teams(df))
+    explicit_venues <- extract_query_venues(query, df)
+    explicit_years <- as.integer(str_extract_all(
+      query,
+      "\\b20[0-9]{2}\\b(?!-[0-9]{2}-[0-9]{2})"
+    )[[1]])
+  }
+
+  available_years <- if (!is.null(df) && "season_year" %in% names(df)) {
+    unique(as.integer(df$season_year[!is.na(df$season_year)]))
+  } else {
+    integer()
+  }
+  invalid_years <- setdiff(explicit_years, available_years)
+
+  parameter_players <- query_parameter_values(
+    parameters,
+    c("player1", "player2", "player_name")
+  )
+  parameter_teams <- query_parameter_values(
+    parameters,
+    c("team1", "team2", "team_name")
+  )
+  players <- if (length(explicit_players)) {
+    explicit_players
+  } else {
+    unique(parameter_players)
+  }
+  teams <- if (length(explicit_teams)) {
+    explicit_teams
+  } else {
+    unique(parameter_teams)
+  }
+  model_venue <- safe_character(parameters$venue_name)
+
+  make_slot <- function(
+    explicit_value = NULL,
+    inferred_value = NULL,
+    requested = FALSE,
+    raw = NULL,
+    unsupported_reason = NULL
+  ) {
+    if (!is.null(unsupported_reason)) {
+      return(query_constraint(
+        value = explicit_value,
+        status = "unsupported",
+        source = "user_query",
+        raw = raw,
+        reason = unsupported_reason
+      ))
+    }
+    if (!is.null(explicit_value)) {
+      return(query_constraint(
+        value = explicit_value,
+        status = "explicit",
+        source = "user_query",
+        raw = raw
+      ))
+    }
+    if (requested) {
+      return(query_constraint(
+        value = NULL,
+        status = "ambiguous",
+        source = "user_query",
+        raw = raw,
+        reason = "The requested constraint could not be resolved unambiguously."
+      ))
+    }
+    if (!is.null(inferred_value)) {
+      return(query_constraint(
+        value = inferred_value,
+        status = "inferred",
+        source = intent_source
+      ))
+    }
+    query_constraint()
+  }
+
+  season_value <- if (length(explicit_years) == 1L &&
+    !length(invalid_years)) {
+    as.character(explicit_years)
+  } else {
+    NULL
+  }
+  all_seasons_requested <- str_detect(
+    query_lower,
+    regex("\\b(across|over)\\s+(all\\s+)?seasons?\\b|\\bseason[- ]by[- ]season\\b")
+  )
+  season_range_value <- if (length(explicit_years) >= 2L &&
+    !length(invalid_years)) {
+    as.character(explicit_years)
+  } else if (
+    all_seasons_requested &&
+      length(available_years)
+  ) {
+    as.character(range(available_years))
+  } else {
+    NULL
+  }
+  relative_season_requested <- str_detect(
+    query_lower,
+    regex("\\b(this|current|last|previous|prior)\\s+season\\b")
+  )
+  season_requested <- length(explicit_years) == 1L ||
+    (relative_season_requested && !all_seasons_requested)
+  season_range_requested <- length(explicit_years) >= 2L ||
+    all_seasons_requested
+  season_reason <- if (length(invalid_years)) {
+    paste(
+      "The requested season is not present in the dataset:",
+      paste(invalid_years, collapse = ", ")
+    )
+  } else if (relative_season_requested && !length(explicit_years)) {
+    "Relative season wording cannot be resolved to a specific dataset season."
+  } else {
+    NULL
+  }
+
+  innings_match <- if (nzchar(query)) extract_query_innings(query) else NULL
+  innings_requested <- !is.null(innings_match)
+  innings_reason <- if (
+    innings_requested && is.null(innings_match$value)
+  ) {
+    "An innings constraint was requested but its value could not be resolved."
+  } else {
+    NULL
+  }
+
+  date_tokens <- if (nzchar(query)) {
+    str_extract_all(query, "\\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\\b")[[1]]
+  } else {
+    character()
+  }
+  date_language_requested <- str_detect(
+    query_lower,
+    regex(
+      "\\b(date|dates|period|last\\s+\\d+\\s+(days?|weeks?|months?|years?)|(?:from|between|since|before|after|during)\\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?))\\b"
+    )
+  )
+  date_range_value <- NULL
+  date_range_reason <- NULL
+  if (length(date_tokens) >= 2L) {
+    parsed_dates <- suppressWarnings(as.Date(date_tokens[1:2]))
+    if (!anyNA(parsed_dates) && parsed_dates[1] <= parsed_dates[2]) {
+      date_range_value <- as.character(parsed_dates)
+    } else {
+      date_range_reason <- "The requested date range is invalid."
+    }
+  } else if (
+    length(date_tokens) > 0L ||
+      date_language_requested
+  ) {
+    date_range_reason <- "The requested date range could not be parsed as a complete start and end date."
+  }
+
+  phase_aliases <- c(
+    powerplay = "Powerplay",
+    "middle overs" = "Middle Overs",
+    "death overs" = "Death Overs",
+    "super over" = "Super Over"
+  )
+  explicit_phases <- names(phase_aliases)[vapply(
+    names(phase_aliases),
+    function(phase) str_detect(query_lower, fixed(phase)),
+    logical(1)
+  )]
+  phase_value <- if (length(explicit_phases)) {
+    unname(phase_aliases[explicit_phases])
+  } else {
+    NULL
+  }
+  phase_requested <- str_detect(
+    query_lower,
+    regex("\\b(match\\s+)?phases?\\b")
+  )
+
+  bowling_style_match <- str_match(
+    query_lower,
+    "\\b(left[- ]arm(?:ed)?\\s+(?:orthodox|wrist\\s+spin|spin|spinner|spinners)|right[- ]arm(?:ed)?\\s+(?:orthodox|wrist\\s+spin|spin|spinner|spinners)|(?:off[- ]spin|leg[- ]spin|left[- ]arm\\s+spin|right[- ]arm\\s+spin)(?:ners?)?)\\b"
+  )
+  bowling_style_requested <- !is.na(bowling_style_match[1, 1])
+
+  metrics <- c(
+    runs = "\\b(runs?|scoring)\\b",
+    wickets = "\\bwickets?\\b",
+    average = "\\b(averages?|mean)\\b",
+    strike_rate = "\\bstrike\\s+rates?\\b",
+    economy = "\\beconomy\\b",
+    boundaries = "\\b(boundaries|fours|sixes)\\b",
+    wins = "\\bwins?\\b"
+  )
+  metrics <- c(
+    metrics,
+    win_pct = "\\bwin\\s*(percentage|percent|rate|pct)\\b"
+  )
+  requested_metrics <- names(metrics)[vapply(
+    metrics,
+    function(pattern) str_detect(query_lower, regex(pattern)),
+    logical(1)
+  )]
+  unsupported_metrics <- str_extract_all(
+    query_lower,
+    "\\b(dot[- ]balls?|maiden overs?|catches|fielding|partnerships?|run rates?)\\b"
+  )[[1]]
+
+  aggregation <- if (str_detect(query_lower, regex("\\b(average|mean)\\b"))) {
+    "average"
+  } else if (str_detect(query_lower, regex("\\b(total|most|highest|top)\\b"))) {
+    "total_or_ranked"
+  } else {
+    NULL
+  }
+
+  comparison_options <- character()
+  if (str_detect(query_lower, regex("\\b(batting|batting performance)\\b"))) {
+    comparison_options <- c(comparison_options, "batting")
+  }
+  if (str_detect(query_lower, regex("\\b(bowling|bowling performance)\\b"))) {
+    comparison_options <- c(comparison_options, "bowling")
+  }
+
+  paired_comparison_requested <- str_detect(
+    query_lower,
+    regex("\\b(compare|versus|vs|difference|better than|worse than|outperform)\\b")
+  )
+  against_two_entities <- str_detect(query_lower, regex("\\bagainst\\b")) &&
+    (
+      length(explicit_players) >= 2L ||
+        length(explicit_teams) >= 2L
+    )
+  comparison_requested <- paired_comparison_requested || against_two_entities
+  players_requested <- length(players) > 0L ||
+    str_detect(
+      query_lower,
+      regex("\\b(?:stats?|statistics|profile|career)\\s+(?:for|of|about)\\s+(?:the\\s+)?(?:player|batter|bowler)\\b|\\b(?:player|batter|bowler)\\s+(?:named|called)\\b")
+    ) ||
+    (comparison_requested && length(explicit_teams) < 2L)
+  teams_requested <- length(teams) > 0L ||
+    str_detect(
+      query_lower,
+      regex("\\b(?:team|franchise)\\s+(?:named|called)\\b|\\b(?:stats?|performance|record)\\s+(?:for|of)\\s+(?:the\\s+)?(?:team|franchise)\\b")
+    ) ||
+    (comparison_requested && length(explicit_players) < 2L)
+  venue_requested <- str_detect(
+    query_lower,
+    regex("\\b(at|venue|stadium|ground)\\b")
+  ) ||
+    (
+      str_detect(query_lower, regex("\\bin\\s+(?!ipl\\b|20[0-9]{2}\\b)")) &&
+        (length(explicit_teams) == 0L || length(explicit_venues) > 0L)
+    )
+
+  players_slot <- make_slot(
+    explicit_value = if (length(explicit_players)) explicit_players else NULL,
+    inferred_value = if (length(players)) players else NULL,
+    requested = players_requested && length(players) == 0L,
+    raw = query
+  )
+  teams_slot <- make_slot(
+    explicit_value = if (length(explicit_teams)) explicit_teams else NULL,
+    inferred_value = if (length(teams)) teams else NULL,
+    requested = teams_requested && length(teams) == 0L,
+    raw = query
+  )
+  if (
+    comparison_requested &&
+      length(explicit_players) == 1L &&
+      length(explicit_teams) < 2L
+  ) {
+    players_slot <- query_constraint(
+      value = explicit_players,
+      status = "ambiguous",
+      source = "user_query",
+      raw = query,
+      reason = "Only one player could be resolved from the requested comparison."
+    )
+  } else if (
+    comparison_requested &&
+      length(explicit_teams) == 1L &&
+      length(explicit_players) < 2L
+  ) {
+    teams_slot <- query_constraint(
+      value = explicit_teams,
+      status = "ambiguous",
+      source = "user_query",
+      raw = query,
+      reason = "Only one team could be resolved from the requested comparison."
+    )
+  }
+
+  venue_slot <- if (length(explicit_venues) > 1L) {
+    query_constraint(
+      value = explicit_venues,
+      status = "ambiguous",
+      source = "user_query",
+      raw = query,
+      reason = "The query mentions multiple possible venues for a single-venue filter."
+    )
+  } else if (
+    venue_requested &&
+      !length(explicit_venues) &&
+      is.null(model_venue)
+  ) {
+    query_constraint(
+      value = NULL,
+      status = "ambiguous",
+      source = "user_query",
+      raw = query,
+      reason = "The requested venue could not be matched to an available dataset venue. Please name one specific venue."
+    )
+  } else {
+    make_slot(
+      explicit_value = if (length(explicit_venues)) explicit_venues else NULL,
+      inferred_value = model_venue,
+      requested = venue_requested && length(explicit_venues) == 0L,
+      raw = query
+    )
+  }
+
+  list(
+    schema_version = 1L,
+    intent = query_constraint(
+      value = safe_character(parsed$intent),
+      status = if (is.null(parsed$intent)) "not_requested" else {
+        if (identical(intent_source, "user_query")) "explicit" else "inferred"
+      },
+      source = intent_source
+    ),
+    players = players_slot,
+    teams = teams_slot,
+    venue = venue_slot,
+    season = make_slot(
+      explicit_value = season_value,
+      inferred_value = if (!season_requested && !season_range_requested) {
+        if (length(date_tokens) || date_language_requested) NULL else {
+          parameters$season
+        }
+      } else {
+        NULL
+      },
+      requested = season_requested,
+      raw = if (season_requested) paste(explicit_years, collapse = ", ") else NULL,
+      unsupported_reason = season_reason
+    ),
+    season_range = make_slot(
+      explicit_value = season_range_value,
+      requested = season_range_requested,
+      raw = if (season_range_requested) {
+        if (length(explicit_years)) {
+          paste(explicit_years, collapse = ", ")
+        } else {
+          "all seasons"
+        }
+      } else {
+        NULL
+      },
+      unsupported_reason = season_reason
+    ),
+    innings = make_slot(
+      explicit_value = if (!is.null(innings_match)) innings_match$value else NULL,
+      requested = innings_requested,
+      raw = if (innings_requested) innings_match$raw else NULL,
+      unsupported_reason = innings_reason
+    ),
+    date_range = make_slot(
+      explicit_value = date_range_value,
+      requested = length(date_tokens) > 0L ||
+        date_language_requested,
+      raw = if (length(date_tokens)) paste(date_tokens, collapse = " to ") else NULL,
+      unsupported_reason = date_range_reason
+    ),
+    match_phase = make_slot(
+      explicit_value = phase_value,
+      requested = phase_requested,
+      raw = if (phase_requested) query else NULL,
+      unsupported_reason = if (phase_requested && is.null(phase_value)) {
+        "The requested match phase is not supported or could not be resolved."
+      } else {
+        NULL
+      }
+    ),
+    bowling_style = if (bowling_style_requested) {
+      query_constraint(
+        value = bowling_style_match[1, 1],
+        status = "unsupported",
+        source = "user_query",
+        raw = bowling_style_match[1, 1],
+        reason = paste(
+          "CricLens cannot calculate player performance against this bowling style:",
+          "the available delivery dataset has no verified bowler handedness or bowling-style field."
+        )
+      )
+    } else {
+      query_constraint()
+    },
+    aggregation = make_slot(
+      explicit_value = aggregation,
+      requested = str_detect(
+        query_lower,
+        regex("\\b(average|mean|total|most|highest|top)\\b")
+      ),
+      raw = if (!is.null(aggregation)) aggregation else NULL
+    ),
+    requested_metrics = make_slot(
+      explicit_value = requested_metrics,
+      requested = length(requested_metrics) > 0L,
+      raw = if (length(requested_metrics)) paste(requested_metrics, collapse = ", ") else NULL,
+      unsupported_reason = if (length(unsupported_metrics)) {
+        paste(
+          "The requested metric is not supported by the current query pipeline:",
+          paste(unique(unsupported_metrics), collapse = ", ")
+        )
+      } else {
+        NULL
+      }
+    ),
+    comparison_options = make_slot(
+      explicit_value = unique(comparison_options),
+      requested = length(comparison_options) > 0L,
+      raw = if (length(comparison_options)) paste(comparison_options, collapse = ", ") else NULL
+    )
   )
 }
 
@@ -1018,7 +1610,13 @@ parse_query_intent <- function(
 
   list(
     intent = intent,
-    parameters = parameters
+    parameters = parameters,
+    query_spec = new_query_representation(
+      list(intent = intent, parameters = parameters),
+      query = query,
+      df = df,
+      intent_source = "model"
+    )
   )
 }
 
@@ -1047,7 +1645,7 @@ extract_requested_count <- function(query, default = 5L) {
   safe_integer(value, default = default)
 }
 
-fallback_query_intent <- function(
+fallback_query_intent_legacy <- function(
   query,
   df
 ) {
@@ -1150,10 +1748,16 @@ fallback_query_intent <- function(
 
   matched_teams <- extract_team_matches(query, teams)
   matched_players <- extract_player_matches(query, players)
-  compare_requested <- str_detect(
+  paired_comparison_requested <- str_detect(
     q_lower,
-    regex("\\b(compare|versus|vs|against|difference|better than|worse than|outperform)\\b")
+    regex("\\b(compare|versus|vs|difference|better than|worse than|outperform)\\b")
   )
+  against_two_entities <- str_detect(q_lower, regex("\\bagainst\\b")) &&
+    (
+      length(matched_players) >= 2L ||
+        length(matched_teams) >= 2L
+    )
+  compare_requested <- paired_comparison_requested || against_two_entities
   player_history_requested <- str_detect(
     q_lower,
     regex("\\b(played for|teams? did .* represent|represented|teams? by season)\\b")
@@ -1567,11 +2171,22 @@ fallback_query_intent <- function(
   )
 }
 
+fallback_query_intent <- function(query, df) {
+  parsed <- fallback_query_intent_legacy(query, df)
+  parsed$query_spec <- new_query_representation(
+    parsed,
+    query = query,
+    df = df,
+    intent_source = "deterministic_parser"
+  )
+  parsed
+}
+
 # ------------------------------------------------------------------
 # Validate intent
 # ------------------------------------------------------------------
 
-validate_intent <- function(
+validate_intent_legacy <- function(
   parsed,
   df
 ) {
@@ -1842,6 +2457,611 @@ validate_intent <- function(
   )
 }
 
+validate_query_representation <- function(query_spec, df) {
+  if (!is.list(query_spec)) {
+    return(query_spec)
+  }
+
+  validate_slot <- function(slot, resolve) {
+    if (
+      !is.list(slot) ||
+        !slot$status %in% c("explicit", "inferred")
+    ) {
+      return(slot)
+    }
+
+    resolved <- resolve(slot$value)
+    if (is.null(resolved) || anyNA(resolved)) {
+      slot$status <- "unsupported"
+      slot$validation <- "invalid"
+      slot$reason <- "The requested value could not be validated against the dataset."
+      return(slot)
+    }
+
+    slot$value <- resolved
+    slot$validation <- "valid"
+    slot
+  }
+
+  query_spec$players <- validate_slot(
+    query_spec$players,
+    function(values) {
+      values <- as.character(unlist(values, use.names = FALSE))
+      resolved <- vapply(values, function(value) {
+        result <- resolve_player_name(value, get_dataset_players(df))
+        if (is.null(result)) NA_character_ else result
+      }, character(1), USE.NAMES = FALSE)
+      if (anyNA(resolved)) NULL else resolved
+    }
+  )
+  query_spec$teams <- validate_slot(
+    query_spec$teams,
+    function(values) {
+      values <- as.character(unlist(values, use.names = FALSE))
+      resolved <- vapply(values, function(value) {
+        result <- resolve_dataset_value(value, get_dataset_teams(df))
+        if (is.null(result)) NA_character_ else result
+      }, character(1), USE.NAMES = FALSE)
+      if (anyNA(resolved)) NULL else resolved
+    }
+  )
+  query_spec$venue <- validate_slot(
+    query_spec$venue,
+    function(values) {
+      values <- as.character(unlist(values, use.names = FALSE))
+      resolved <- vapply(values, function(value) {
+        result <- resolve_dataset_value(value, get_dataset_venues(df))
+        if (is.null(result)) NA_character_ else result
+      }, character(1), USE.NAMES = FALSE)
+      if (anyNA(resolved)) NULL else resolved
+    }
+  )
+  available_seasons <- unique(as.character(
+    as.integer(df$season_year[!is.na(df$season_year)])
+  ))
+  query_spec$season <- validate_slot(
+    query_spec$season,
+    function(value) {
+      value <- safe_character(value)
+      if (is.null(value) || !value %in% available_seasons) NULL else value
+    }
+  )
+  query_spec$season_range <- validate_slot(
+    query_spec$season_range,
+    function(values) {
+      values <- as.character(unlist(values, use.names = FALSE))
+      if (!length(values) || !all(values %in% available_seasons)) NULL else values
+    }
+  )
+  query_spec$innings <- validate_slot(
+    query_spec$innings,
+    function(value) {
+      if (identical(value, "super_over")) {
+        if (any(df$is_super_over %in% TRUE, na.rm = TRUE)) value else NULL
+      } else if (
+        length(value) == 1L &&
+          is.numeric(value) &&
+          value %in% unique(df$innings)
+      ) {
+        as.integer(value)
+      } else {
+        NULL
+      }
+    }
+  )
+  query_spec$date_range <- validate_slot(
+    query_spec$date_range,
+    function(value) {
+      dates <- suppressWarnings(as.Date(unlist(value, use.names = FALSE)))
+      if (
+        length(dates) != 2L ||
+          anyNA(dates) ||
+          dates[1] > dates[2] ||
+          dates[1] < min(df$date, na.rm = TRUE) ||
+          dates[2] > max(df$date, na.rm = TRUE)
+      ) {
+        NULL
+      } else {
+        as.character(dates)
+      }
+    }
+  )
+  if (
+    identical(query_spec$date_range$status, "unsupported") &&
+      identical(query_spec$date_range$validation, "invalid")
+  ) {
+    query_spec$date_range$reason <- paste(
+      "The requested date range is outside the date coverage",
+      "available in the dataset."
+    )
+  }
+  query_spec$match_phase <- validate_slot(
+    query_spec$match_phase,
+    function(values) {
+      values <- as.character(unlist(values, use.names = FALSE))
+      available <- unique(as.character(df$match_phase))
+      resolved <- vapply(values, function(value) {
+        result <- resolve_dataset_value(value, available)
+        if (is.null(result)) NA_character_ else result
+      }, character(1), USE.NAMES = FALSE)
+      if (anyNA(resolved)) NULL else resolved
+    }
+  )
+
+  query_spec
+}
+
+validate_intent <- function(parsed, df) {
+  validated <- validate_intent_legacy(parsed, df)
+  query_spec <- parsed$query_spec
+  if (is.null(query_spec)) {
+    query_spec <- new_query_representation(parsed)
+  }
+  validated$query_spec <- validate_query_representation(query_spec, df)
+  if (is.list(validated$parameters)) {
+    parameters <- validated$parameters
+    players <- validated$query_spec$players
+    if (
+      players$status %in% c("explicit", "inferred") &&
+        players$validation == "valid"
+    ) {
+      if (validated$intent %in% c("player_comparison") &&
+        length(players$value) == 2L) {
+        parameters$player1 <- players$value[1]
+        parameters$player2 <- players$value[2]
+      } else if (
+        validated$intent %in% c(
+          "player_profile", "player_bowling_profile",
+          "player_team_history"
+        ) &&
+          length(players$value) == 1L
+      ) {
+        parameters$player_name <- players$value[1]
+      }
+    }
+    teams <- validated$query_spec$teams
+    if (
+      teams$status %in% c("explicit", "inferred") &&
+        teams$validation == "valid"
+    ) {
+      if (validated$intent == "head_to_head" && length(teams$value) == 2L) {
+        parameters$team1 <- teams$value[1]
+        parameters$team2 <- teams$value[2]
+      } else if (
+        validated$intent %in% c("team_summary", "team_trend") &&
+          length(teams$value) == 1L
+      ) {
+        parameters$team_name <- teams$value[1]
+      }
+    }
+    venue <- validated$query_spec$venue
+    if (
+      validated$intent == "venue_stats" &&
+        venue$status %in% c("explicit", "inferred") &&
+        venue$validation == "valid" &&
+        length(venue$value) == 1L
+    ) {
+      parameters$venue_name <- venue$value[1]
+    }
+    season <- validated$query_spec$season
+    if (
+      season$status %in% c("explicit", "inferred") &&
+        season$validation == "valid"
+    ) {
+      parameters$season <- season$value
+    }
+    validated$parameters <- parameters
+  }
+  validated
+}
+
+query_spec_limitation <- function(query_spec, intent) {
+  constrained_fields <- c(
+    "players", "teams", "venue", "season", "season_range",
+    "innings", "date_range", "match_phase", "bowling_style", "requested_metrics",
+    "comparison_options"
+  )
+  for (field in constrained_fields) {
+    constraint <- query_spec[[field]]
+    if (!is.list(constraint)) {
+      next
+    }
+    if (constraint$status %in% c("ambiguous", "unsupported")) {
+      limitation <- safe_character(
+        constraint$reason,
+        paste0(
+          "The requested ",
+          gsub("_", " ", field, fixed = TRUE),
+          " constraint cannot be supported safely."
+        )
+      )
+      if (
+        field == "bowling_style" &&
+          query_spec$venue$status %in% c("explicit", "inferred") &&
+          query_spec$venue$validation == "valid" &&
+          length(query_spec$venue$value) == 1L
+      ) {
+        limitation <- paste0(
+          "The requested venue resolves to ",
+          query_spec$venue$value,
+          ". ",
+          limitation
+        )
+      }
+      return(limitation)
+    }
+    if (
+      constraint$status %in% c("explicit", "inferred") &&
+        identical(constraint$validation, "invalid")
+    ) {
+      return(safe_character(
+        constraint$reason,
+        paste0(
+          "The requested ",
+          gsub("_", " ", field, fixed = TRUE),
+          " constraint is not available in the dataset."
+        )
+      ))
+    }
+  }
+
+  requested_metrics <- query_spec$requested_metrics$value
+  if (length(requested_metrics)) {
+    supported_metrics <- switch(
+      intent,
+      top_batters = c("runs", "average", "strike_rate", "boundaries"),
+      player_profile = c("runs", "average", "strike_rate", "boundaries"),
+      player_comparison = c("runs", "average", "strike_rate", "boundaries"),
+      top_bowlers = c("wickets", "average", "strike_rate", "economy"),
+      player_bowling_profile = c("wickets", "average", "strike_rate", "economy"),
+      team_summary = c("wins", "win_pct"),
+      team_trend = c("wins"),
+      head_to_head = c("wins"),
+      venue_stats = c("runs", "average", "wickets", "wins"),
+      character()
+    )
+    unsupported_metrics <- setdiff(requested_metrics, supported_metrics)
+    if (length(unsupported_metrics)) {
+      return(paste(
+        "The current CricLens analytics do not support",
+        paste(unsupported_metrics, collapse = ", "),
+        "for this query type."
+      ))
+    }
+  }
+
+  if (
+    identical(query_spec$aggregation$status, "explicit") &&
+      identical(query_spec$aggregation$value, "average") &&
+      intent %in% c("top_batters", "top_bowlers")
+  ) {
+    return(
+      "The available leaderboard does not rank players by the requested average; it ranks batters by runs and bowlers by wickets."
+    )
+  }
+
+  comparison_metrics <- query_spec$comparison_options$value
+  if (
+    intent == "player_comparison" &&
+      length(comparison_metrics) &&
+      any(comparison_metrics != "batting")
+  ) {
+    return(
+      "Player comparisons currently support batting metrics only; a verified bowling comparison is not available."
+    )
+  }
+
+  if (
+    intent %in% c("player_comparison", "head_to_head") &&
+      query_spec$players$status %in% c("explicit", "inferred") &&
+      length(query_spec$players$value) != 2L
+  ) {
+    return("Please provide exactly two players for this comparison.")
+  }
+  if (
+    intent == "head_to_head" &&
+      query_spec$teams$status %in% c("explicit", "inferred") &&
+      length(query_spec$teams$value) != 2L
+  ) {
+    return("Please provide exactly two teams for this head-to-head comparison.")
+  }
+
+  if (
+    intent == "venue_stats" &&
+      query_spec$venue$status %in% c("explicit", "inferred") &&
+      length(query_spec$venue$value) != 1L
+  ) {
+    return("Venue statistics require one unambiguous venue; the requested venue could not be isolated.")
+  }
+
+  player_scoped_intents <- c(
+    "top_batters", "top_bowlers", "player_profile",
+    "player_bowling_profile", "player_comparison",
+    "player_team_history"
+  )
+  if (
+    query_spec$players$status %in% c("explicit", "inferred") &&
+      !intent %in% player_scoped_intents
+  ) {
+    return(
+      "The current analytics cannot apply a player filter to this query type without changing its metric definition."
+    )
+  }
+
+  match_level_intents <- c(
+    "team_summary", "team_trend", "head_to_head", "venue_stats"
+  )
+  if (
+    intent %in% match_level_intents &&
+      query_spec$innings$status %in% c("explicit", "inferred")
+  ) {
+    return(
+      "This match-level analysis requires complete innings records; an innings-only filter would make its match totals or outcomes misleading."
+    )
+  }
+  if (
+    intent == "venue_stats" &&
+      query_spec$match_phase$status %in% c("explicit", "inferred")
+  ) {
+    return(
+      "Venue profiles calculate whole-innings scores and match outcomes; the current metric definitions cannot apply a match-phase-only filter safely."
+    )
+  }
+
+  if (
+    intent %in% c(
+      "top_batters", "top_bowlers", "player_profile",
+      "player_bowling_profile", "player_comparison"
+    ) &&
+      query_spec$innings$status %in% c("explicit", "inferred") &&
+      !identical(query_spec$innings$value, "super_over") &&
+      !(query_spec$innings$value %in% c(1L, 2L))
+  ) {
+    return(paste(
+      "The existing verified batting and bowling metrics exclude innings",
+      "outside innings 1 and 2, so this innings-specific request cannot",
+      "be answered using their current definitions."
+    ))
+  }
+
+  if (
+    intent %in% c("top_batters", "top_bowlers", "player_profile",
+      "player_bowling_profile", "player_comparison") &&
+      identical(query_spec$innings$value, "super_over")
+  ) {
+    return(
+      "The existing verified batting and bowling metrics exclude Super Overs; that innings-specific request is not supported."
+    )
+  }
+  if (
+    intent %in% c("top_batters", "top_bowlers", "player_profile",
+      "player_bowling_profile", "player_comparison") &&
+      identical(query_spec$match_phase$value, "Super Over")
+  ) {
+    return(
+      "The existing verified batting and bowling metrics exclude Super Overs; that match-phase request is not supported."
+    )
+  }
+
+  NULL
+}
+
+apply_query_spec_filters <- function(df, query_spec, intent) {
+  filtered <- df
+  applied <- character()
+
+  apply_filter <- function(field, column, values, operator = "in") {
+    if (!length(values)) {
+      return(NULL)
+    }
+    if (!column %in% names(filtered)) {
+      return(paste0(
+        "The dataset does not contain the ",
+        gsub("_", " ", field, fixed = TRUE),
+        " field required by this query."
+      ))
+    }
+    if (operator == "range") {
+      filtered <<- filtered[
+        !is.na(filtered[[column]]) &
+          filtered[[column]] >= values[1] &
+          filtered[[column]] <= values[2],
+        ,
+        drop = FALSE
+      ]
+    } else {
+      filtered <<- filtered[
+        !is.na(filtered[[column]]) &
+          filtered[[column]] %in% values,
+        ,
+        drop = FALSE
+      ]
+    }
+    applied <<- c(applied, field)
+    NULL
+  }
+
+  venue <- query_spec$venue
+  if (venue$status %in% c("explicit", "inferred")) {
+    venue_column <- if ("canonical_venue" %in% names(filtered)) {
+      "canonical_venue"
+    } else {
+      "venue"
+    }
+    issue <- apply_filter("venue", venue_column, venue$value)
+    if (!is.null(issue)) return(list(data = filtered, applied = applied, reason = issue))
+  }
+
+  season <- query_spec$season
+  if (season$status %in% c("explicit", "inferred")) {
+    issue <- apply_filter(
+      "season",
+      "season_year",
+      as.numeric(season$value)
+    )
+    if (!is.null(issue)) return(list(data = filtered, applied = applied, reason = issue))
+  }
+
+  season_range <- query_spec$season_range
+  if (season_range$status %in% c("explicit", "inferred")) {
+    values <- as.numeric(season_range$value)
+    issue <- apply_filter("season range", "season_year", range(values), "range")
+    if (!is.null(issue)) return(list(data = filtered, applied = applied, reason = issue))
+  }
+
+  date_range <- query_spec$date_range
+  if (date_range$status %in% c("explicit", "inferred")) {
+    values <- as.Date(date_range$value)
+    issue <- apply_filter("date range", "date", values, "range")
+    if (!is.null(issue)) return(list(data = filtered, applied = applied, reason = issue))
+  }
+
+  innings <- query_spec$innings
+  if (innings$status %in% c("explicit", "inferred")) {
+    if (identical(innings$value, "super_over")) {
+      if (!"is_super_over" %in% names(filtered)) {
+        return(list(
+          data = filtered,
+          applied = applied,
+          reason = "The dataset does not contain the Super Over flag required by this query."
+        ))
+      }
+      filtered <- filtered[filtered$is_super_over %in% TRUE, , drop = FALSE]
+      applied <- c(applied, "innings")
+    } else {
+      issue <- apply_filter("innings", "innings", innings$value)
+      if (!is.null(issue)) return(list(data = filtered, applied = applied, reason = issue))
+    }
+  }
+
+  phase <- query_spec$match_phase
+  if (phase$status %in% c("explicit", "inferred")) {
+    issue <- apply_filter("match phase", "match_phase", phase$value)
+    if (!is.null(issue)) return(list(data = filtered, applied = applied, reason = issue))
+  }
+
+  teams <- query_spec$teams
+  if (
+    teams$status %in% c("explicit", "inferred") &&
+      length(teams$value)
+  ) {
+    required <- c("batting_team", "bowling_team")
+    if (!all(required %in% names(filtered))) {
+      return(list(
+        data = filtered,
+        applied = applied,
+        reason = "The dataset does not contain the team fields required by this query."
+      ))
+    }
+    team_match <- if (intent %in% c(
+      "top_batters", "player_profile", "player_comparison"
+    )) {
+      !is.na(filtered$batting_team) &
+        filtered$batting_team %in% teams$value
+    } else if (intent %in% c("top_bowlers", "player_bowling_profile")) {
+      !is.na(filtered$bowling_team) &
+        filtered$bowling_team %in% teams$value
+    } else {
+      (!is.na(filtered$batting_team) & filtered$batting_team %in% teams$value) |
+        (!is.na(filtered$bowling_team) & filtered$bowling_team %in% teams$value)
+    }
+    filtered <- filtered[team_match, , drop = FALSE]
+    applied <- c(applied, "teams")
+  }
+
+  list(data = filtered, applied = applied, reason = NULL)
+}
+
+validate_query_result_scope <- function(intent, result, query_spec) {
+  if (is.null(result)) {
+    return(NULL)
+  }
+
+  expected_players <- if (
+    query_spec$players$status %in% c("explicit", "inferred") &&
+      query_spec$players$validation == "valid"
+  ) {
+    query_spec$players$value
+  } else {
+    character()
+  }
+  if (is.data.frame(result) && length(expected_players)) {
+    player_column <- switch(
+      intent,
+      top_batters = "batter",
+      top_bowlers = "bowler",
+      player_bowling_profile = "bowler",
+      player_profile = "player",
+      player_comparison = "player",
+      NULL
+    )
+    if (
+      !is.null(player_column) &&
+        player_column %in% names(result) &&
+        any(!result[[player_column]] %in% expected_players)
+    ) {
+      return("The calculated player results do not match the resolved player scope.")
+    }
+    if (
+      intent == "player_comparison" &&
+        !is.null(player_column) &&
+        player_column %in% names(result) &&
+        !setequal(result[[player_column]], expected_players)
+    ) {
+      return("The available filtered records did not produce results for both requested players.")
+    }
+  }
+
+  expected_teams <- if (
+    query_spec$teams$status %in% c("explicit", "inferred") &&
+      query_spec$teams$validation == "valid"
+  ) {
+    query_spec$teams$value
+  } else {
+    character()
+  }
+  if (intent == "head_to_head" && is.list(result)) {
+    if (
+      length(expected_teams) == 2L &&
+        !setequal(c(result$team1, result$team2), expected_teams)
+    ) {
+      return("The calculated head-to-head result does not match the resolved team scope.")
+    }
+    if (identical(result$total_matches, 0L) || identical(result$total_matches, 0)) {
+      return("No head-to-head matches were found for the requested filters.")
+    }
+  }
+  if (
+    is.data.frame(result) &&
+      length(expected_teams) == 1L &&
+      intent %in% c("team_summary", "team_trend") &&
+      "team" %in% names(result) &&
+      any(result$team != expected_teams)
+  ) {
+    return("The calculated team results do not match the resolved team scope.")
+  }
+
+  expected_venue <- if (
+    query_spec$venue$status %in% c("explicit", "inferred") &&
+      query_spec$venue$validation == "valid" &&
+      length(query_spec$venue$value) == 1L
+  ) {
+    query_spec$venue$value
+  } else {
+    NULL
+  }
+  if (
+    intent == "venue_stats" &&
+      !is.null(expected_venue) &&
+      is.list(result) &&
+      !identical(result$venue, expected_venue)
+  ) {
+    return("The calculated venue result does not match the resolved venue scope.")
+  }
+
+  NULL
+}
+
 # ------------------------------------------------------------------
 # Execute R analytics
 # ------------------------------------------------------------------
@@ -1859,12 +3079,24 @@ execute_r_analytics <- function(
   p <- validated$parameters
 
   season <- p$season
+  query_spec <- validated$query_spec
+  if (!is.list(query_spec)) {
+    query_spec <- new_query_representation(validated)
+    query_spec <- validate_query_representation(query_spec, df)
+  }
 
   # ---------------------------------------------------------------
   # Unsupported
   # ---------------------------------------------------------------
 
   if (intent == "unsupported") {
+    if (identical(query_spec$requested_metrics$status, "unsupported")) {
+      return(list(
+        intent = "unsupported",
+        result = NULL,
+        reason = query_spec$requested_metrics$reason
+      ))
+    }
 
     return(
       list(
@@ -1878,6 +3110,90 @@ execute_r_analytics <- function(
     )
   }
 
+  limitation <- query_spec_limitation(query_spec, intent)
+  if (!is.null(limitation)) {
+    return(list(intent = "unsupported", result = NULL, reason = limitation))
+  }
+  filtered_data <- apply_query_spec_filters(df, query_spec, intent)
+  if (!is.null(filtered_data$reason)) {
+    return(list(
+      intent = "unsupported",
+      result = NULL,
+      reason = filtered_data$reason
+    ))
+  }
+  if (!nrow(filtered_data$data)) {
+    scope <- unique(c(
+      filtered_data$applied,
+      if (length(query_spec$players$value)) "player" else character()
+    ))
+    return(list(
+      intent = "unsupported",
+      result = NULL,
+      reason = paste0(
+        "No dataset records match the requested ",
+        paste(scope, collapse = ", "),
+        " filters."
+      )
+    ))
+  }
+  df <- filtered_data$data
+  scope_applied <- filtered_data$applied
+  scope <- list(
+    filters = scope_applied,
+    record_count = nrow(df),
+    records = "delivery_rows",
+    constraints = lapply(
+      query_spec[c(
+        "players", "teams", "venue", "season", "season_range",
+        "innings", "date_range", "match_phase"
+      )],
+      function(constraint) {
+        if (
+          is.list(constraint) &&
+            constraint$status %in% c("explicit", "inferred") &&
+            constraint$validation == "valid"
+        ) {
+          constraint$value
+        } else {
+          NULL
+        }
+      }
+    )
+  )
+  finish_result <- function(result, additional = list()) {
+    if (is.null(result)) {
+      return(list(
+        intent = "unsupported",
+        result = NULL,
+        reason = paste(
+          "No analytical result was available for the requested filters:",
+          paste(scope$filters, collapse = ", "),
+          "."
+        )
+      ))
+    }
+    if (is.data.frame(result) && !nrow(result)) {
+      return(list(
+        intent = "unsupported",
+        result = NULL,
+        reason = paste(
+          "No analytical records match the requested filters:",
+          paste(scope$filters, collapse = ", "),
+          "."
+        )
+      ))
+    }
+    issue <- validate_query_result_scope(intent, result, query_spec)
+    if (!is.null(issue)) {
+      return(list(intent = "unsupported", result = NULL, reason = issue))
+    }
+    c(
+      list(intent = intent, result = result, scope = scope),
+      additional
+    )
+  }
+
   # ---------------------------------------------------------------
   # Top batters
   # ---------------------------------------------------------------
@@ -1886,21 +3202,30 @@ execute_r_analytics <- function(
 
     result <- get_top_batters(
       df,
-      top_n = p$top_n + p$offset,
+      top_n = if (
+        query_spec$players$status %in% c("explicit", "inferred") &&
+          length(query_spec$players$value)
+      ) {
+        dplyr::n_distinct(df$batter)
+      } else {
+        p$top_n + p$offset
+      },
       season_filter = season
     )
 
+    if (
+      query_spec$players$status %in% c("explicit", "inferred") &&
+        length(query_spec$players$value) &&
+        "batter" %in% names(result)
+    ) {
+      result <- result[result$batter %in% query_spec$players$value, , drop = FALSE]
+    }
     if (p$offset > 0 && nrow(result) > p$offset) {
       last_row <- min(nrow(result), p$offset + p$top_n)
       result <- result[seq.int(p$offset + 1, last_row), , drop = FALSE]
     }
 
-    return(
-      list(
-        intent = intent,
-        result = result
-      )
-    )
+    return(finish_result(result))
   }
 
   # ---------------------------------------------------------------
@@ -1911,21 +3236,30 @@ execute_r_analytics <- function(
 
     result <- get_top_bowlers(
       df,
-      top_n = p$top_n + p$offset,
+      top_n = if (
+        query_spec$players$status %in% c("explicit", "inferred") &&
+          length(query_spec$players$value)
+      ) {
+        dplyr::n_distinct(df$bowler)
+      } else {
+        p$top_n + p$offset
+      },
       season_filter = season
     )
 
+    if (
+      query_spec$players$status %in% c("explicit", "inferred") &&
+        length(query_spec$players$value) &&
+        "bowler" %in% names(result)
+    ) {
+      result <- result[result$bowler %in% query_spec$players$value, , drop = FALSE]
+    }
     if (p$offset > 0 && nrow(result) > p$offset) {
       last_row <- min(nrow(result), p$offset + p$top_n)
       result <- result[seq.int(p$offset + 1, last_row), , drop = FALSE]
     }
 
-    return(
-      list(
-        intent = intent,
-        result = result
-      )
-    )
+    return(finish_result(result))
   }
 
   # ---------------------------------------------------------------
@@ -1944,12 +3278,7 @@ execute_r_analytics <- function(
       p$player_name
     )
 
-    return(
-      list(
-        intent = intent,
-        result = result
-      )
-    )
+    return(finish_result(result))
   }
 
   if (intent == "player_bowling_profile") {
@@ -1964,7 +3293,7 @@ execute_r_analytics <- function(
     ) %>%
       filter(.data$bowler == p$player_name)
 
-    return(list(intent = intent, result = result))
+    return(finish_result(result, list(player_name = p$player_name)))
   }
 
   if (intent == "player_team_history") {
@@ -2010,11 +3339,7 @@ execute_r_analytics <- function(
         filter(.data$season == as.numeric(.env$season))
     }
 
-    return(list(
-      intent = intent,
-      result = result,
-      player_name = p$player_name
-    ))
+    return(finish_result(result, list(player_name = p$player_name)))
   }
 
   if (intent == "player_comparison") {
@@ -2027,8 +3352,30 @@ execute_r_analytics <- function(
       get_player_batting_profile(comparison_df, p$player1),
       get_player_batting_profile(comparison_df, p$player2)
     )
+    if (nrow(result) != 2L) {
+      available_players <- if (is.data.frame(result) && "player" %in% names(result)) {
+        result$player
+      } else {
+        character()
+      }
+      missing_players <- setdiff(c(p$player1, p$player2), available_players)
+      requested_scope <- format_query_scope(query_spec)
+      return(list(
+        intent = "unsupported",
+        result = NULL,
+        scope = scope,
+        reason = paste(
+          paste0(
+            "No batting records were found for ",
+            paste(missing_players, collapse = " and "),
+            " under the requested filters."
+          ),
+          requested_scope
+        )
+      ))
+    }
 
-    return(list(intent = intent, result = result))
+    return(finish_result(result, list(player_name = p$player_name)))
   }
 
   # ---------------------------------------------------------------
@@ -2058,15 +3405,11 @@ execute_r_analytics <- function(
         )
     }
 
-    return(
-      list(
-        intent = intent,
-        result = result,
-        metric = p$metric,
-        ranking = identical(p$metric, "win_pct") &&
-          is.null(p$team_name)
-      )
-    )
+    return(finish_result(result, list(
+      metric = p$metric,
+      ranking = identical(p$metric, "win_pct") &&
+        is.null(p$team_name)
+    )))
   }
 
   if (intent == "team_trend") {
@@ -2087,7 +3430,7 @@ execute_r_analytics <- function(
       bind_rows() %>%
         select(season, dplyr::everything())
 
-    return(list(intent = intent, result = result))
+    return(finish_result(result))
   }
 
   # ---------------------------------------------------------------
@@ -2106,12 +3449,7 @@ execute_r_analytics <- function(
       p$venue_name
     )
 
-    return(
-      list(
-        intent = intent,
-        result = result
-      )
-    )
+    return(finish_result(result))
   }
 
   # ---------------------------------------------------------------
@@ -2131,12 +3469,7 @@ execute_r_analytics <- function(
       p$team2
     )
 
-    return(
-      list(
-        intent = intent,
-        result = result
-      )
-    )
+    return(finish_result(result))
   }
 
   list(
@@ -2193,9 +3526,22 @@ explanation_numeric_values_are_supported <- function(
     return(TRUE)
   }
 
+  verified_result_text <- format_r_result(analytics_result)
+  verified_result_lines <- strsplit(
+    verified_result_text,
+    "\n",
+    fixed = TRUE
+  )[[1]]
+  verified_result_lines <- verified_result_lines[
+    !stringr::str_detect(
+      verified_result_lines,
+      regex("^\\|\\s*(player|batter|bowler|team|season|venue)\\b", ignore_case = TRUE)
+    ) &
+      !stringr::str_detect(verified_result_lines, "^\\|[-: |]+\\|$")
+  ]
   verified_numbers <- extract_numbers(paste(
     query,
-    prepare_explainer_payload(analytics_result$result)
+    verified_result_lines
   ))
   all(explanation_numbers %in% verified_numbers)
 }
@@ -2481,7 +3827,8 @@ format_r_result <- function(
   if (intent == "player_comparison") {
     required_columns <- c(
       "player", "matches", "innings", "total_runs",
-      "average", "strike_rate", "fours", "sixes"
+      "average", "strike_rate", "fours", "sixes",
+      "highest_score", "fifties", "hundreds"
     )
     if (
       !is.data.frame(result) ||
@@ -2499,7 +3846,8 @@ format_r_result <- function(
           "| **", row$player, "** | ",
           row$matches, " | ", row$innings, " | ",
           row$total_runs, " | ", row$average, " | ",
-          row$strike_rate, " | ", row$fours, " | ", row$sixes, " |"
+          row$strike_rate, " | ", row$fours, " | ", row$sixes, " | ",
+          row$highest_score, " | ", row$fifties, " | ", row$hundreds, " |"
         )
       },
       character(1)
@@ -2507,8 +3855,8 @@ format_r_result <- function(
     return(paste(c(
       "### 🏏 Player Batting Comparison",
       "",
-      "| Player | Matches | Innings | Runs | Average | Strike Rate | 4s | 6s |",
-      "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+      "| Player | Matches | Innings | Runs | Average | Strike Rate | 4s | 6s | Highest Score | 50s | 100s |",
+      "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
       rows
     ), collapse = "\n"))
   }
@@ -2532,6 +3880,7 @@ format_r_result <- function(
       "total_runs",
       "average",
       "strike_rate",
+      "highest_score",
       "fours",
       "sixes",
       "fifties",
@@ -2563,6 +3912,9 @@ format_r_result <- function(
         "\n",
         "- **Strike Rate:** ",
         row$strike_rate,
+        "\n",
+        "- **Highest Score:** ",
+        row$highest_score,
         "\n",
         "- **Fours:** ",
         row$fours,
@@ -2943,6 +4295,114 @@ resolve_criclens_followup <- function(
   query
 }
 
+format_query_scope <- function(query_spec) {
+  if (!is.list(query_spec)) {
+    return("")
+  }
+
+  scope_fields <- c(
+    players = "Players",
+    teams = "Teams",
+    venue = "Venue",
+    season = "Season",
+    season_range = "Seasons",
+    innings = "Innings",
+    date_range = "Dates",
+    match_phase = "Match phase"
+  )
+  descriptions <- vapply(names(scope_fields), function(field) {
+    constraint <- query_spec[[field]]
+    if (
+      !is.list(constraint) ||
+        !constraint$status %in% c("explicit", "inferred") ||
+        !identical(constraint$validation, "valid")
+    ) {
+      return("")
+    }
+    value <- constraint$value
+    if (field == "innings" && identical(value, "super_over")) {
+      value <- "Super Over"
+    } else if (field == "date_range") {
+      value <- paste(value, collapse = " to ")
+    } else {
+      value <- paste(value, collapse = ", ")
+    }
+    paste0(scope_fields[[field]], ": ", value)
+  }, character(1), USE.NAMES = FALSE)
+  descriptions <- descriptions[nzchar(descriptions)]
+  if (!length(descriptions)) {
+    return("")
+  }
+  paste0("\n\n_Applied filters: ", paste(descriptions, collapse = "; "), "_")
+}
+
+is_cricket_analytics_query <- function(query) {
+  str_detect(
+    tolower(safe_character(query, default = "")),
+    regex(
+      "\\b(ipl|cricket|runs?|wickets?|batting|bowlers?|batters?|players?|teams?|franchises?|venues?|stadiums?|grounds?|matches?|seasons?|innings|strike\\s+rate|economy|head[- ]to[- ]head|stats?|statistics|performance|profiles?|careers?|compare|versus|\\bvs\\b|sixes|fours|boundaries|scores?|dot[- ]balls?|maiden overs?|catches|fielding|partnerships?|run rates?)\\b"
+    )
+  )
+}
+
+general_conversation_response <- function(query, df = NULL) {
+  normalized <- tolower(trimws(safe_character(query, default = "")))
+  if (!nzchar(normalized)) {
+    return(NULL)
+  }
+
+  if (
+    str_detect(normalized, regex("\\b(win|winning)\\s+probabilit(y|ies)\\b")) &&
+      str_detect(normalized, regex("\\b(why|change|changes|changing|shift|shifts|during|chase|chasing)\\b"))
+  ) {
+    return(paste(
+      "During a chase, the estimate changes as the match state changes: runs required,",
+      "balls remaining, and wickets remaining all affect the chasing side's prospects.",
+      "CricLens's saved model uses those state values plus required run rate and current run rate.",
+      "Factors such as batter-bowler matchups, pitch conditions, and weather may matter to cricket",
+      "in general, but they are not explicit input features in this model. The output is a",
+      "historical-data-based estimate, not a certainty."
+    ))
+  }
+
+  if (str_detect(normalized, regex("^(hi|hello|hey|good morning|good afternoon|good evening)[!.?,\\s]*$"))) {
+    return("Hi! I'm CricLens. I can help explore IPL player, team, venue, and match analytics.")
+  }
+  if (str_detect(normalized, regex("^(thanks|thank you|thx)[!.?,\\s]*$"))) {
+    return("You're welcome! Ask me whenever you'd like to explore IPL analytics.")
+  }
+  if (str_detect(
+    normalized,
+    regex("\\b(what can you do|how can you help|who are you|what are you|\\bhelp\\b)\\b")
+  )) {
+    return(paste(
+      "I'm CricLens, an IPL analytics assistant.",
+      "I can report verified player and team statistics, compare players or teams,",
+      "show venue profiles, and analyze supported seasons and match filters."
+    ))
+  }
+  if (
+    !is.null(df) &&
+      str_detect(normalized, regex("\\b(what|how)\\s+about\\b")) &&
+      (
+        length(extract_team_matches(query, get_dataset_teams(df))) > 0L ||
+          length(extract_player_matches(query, get_dataset_players(df))) > 0L
+      )
+  ) {
+    return(paste(
+      "What would you like to know about that IPL team or player?",
+      "I can show verified statistics, seasonal performance, or a comparison."
+    ))
+  }
+  if (!is_cricket_analytics_query(normalized)) {
+    return(paste(
+      "I'm CricLens, focused on IPL analytics.",
+      "I can help with verified player, team, venue, and match statistics."
+    ))
+  }
+  NULL
+}
+
 process_criclens_query <- function(
   query,
   df,
@@ -2977,26 +4437,36 @@ process_criclens_query <- function(
 
 process_criclens_query_result <- function(query, df, status_callback = NULL) {
 
-  # ---------------------------------------------------------------
-  # 1. Ask NIM to identify intent
-  # ---------------------------------------------------------------
+  general_response <- general_conversation_response(query, df)
+  if (!is.null(general_response)) {
+    return(general_response)
+  }
 
-  parsed <- parse_query_intent(
-    query,
-    df,
-    status_callback
-  )
-
-  # ---------------------------------------------------------------
-  # 2. Deterministic fallback if NIM parsing fails
-  # ---------------------------------------------------------------
-
-  if (is.null(parsed)) {
-
-    parsed <- fallback_query_intent(
-      query,
-      df
+  parsed <- fallback_query_intent(query, df)
+  used_nim_for_intent <- FALSE
+  if (
+    identical(parsed$intent, "unsupported") &&
+      is_cricket_analytics_query(query)
+  ) {
+    nim_parsed <- tryCatch(
+      parse_query_intent(query, df, status_callback),
+      error = function(error) {
+        report_nim_status(
+          status_callback,
+          "degraded",
+          "NVIDIA NIM could not interpret the query. Deterministic R routing is being used."
+        )
+        message("NVIDIA NIM intent interpretation failed; using deterministic R routing.")
+        NULL
+      }
     )
+    if (
+      is.list(nim_parsed) &&
+        !identical(nim_parsed$intent, "unsupported")
+    ) {
+      parsed <- nim_parsed
+      used_nim_for_intent <- TRUE
+    }
   }
 
   # ---------------------------------------------------------------
@@ -3050,15 +4520,46 @@ process_criclens_query_result <- function(query, df, status_callback = NULL) {
   }
 
   # ---------------------------------------------------------------
-  # 6. Ask NIM to explain ONLY the validated R result
+  # 6. Ask NIM to explain ONLY the validated R result.
+  # If NIM already interpreted this query, keep this response deterministic
+  # rather than making a second potentially blocking request.
   # ---------------------------------------------------------------
 
   deterministic_result <- format_r_result(analytics_result)
-  explanation <- explain_validated_result(
-    query,
-    analytics_result,
-    status_callback
+  query_scope <- format_query_scope(validated$query_spec)
+  if (nzchar(query_scope)) {
+    deterministic_result <- paste0(deterministic_result, query_scope)
+  }
+  deterministic_fallback <- paste(
+    deterministic_result,
+    "\n\n#### Explanation\n\n",
+    "The statistics above are calculated by CricLens R analytics from the IPL dataset.",
+    if (length(analytics_result$scope$filters)) {
+      "The requested filters shown above were applied to source records before aggregation."
+    } else {
+      "No additional query filters were applied."
+    }
   )
+  explanation <- if (used_nim_for_intent) {
+    NULL
+  } else {
+    tryCatch(
+      explain_validated_result(
+        query,
+        analytics_result,
+        status_callback
+      ),
+      error = function(error) {
+        report_nim_status(
+          status_callback,
+          "degraded",
+          "NVIDIA NIM explanation failed. The verified result is being returned with a deterministic explanation."
+        )
+        message("NVIDIA NIM explanation failed; returning the verified R result.")
+        NULL
+      }
+    )
+  }
 
   # ---------------------------------------------------------------
   # 7. If NIM explanation succeeds, return it
@@ -3068,7 +4569,8 @@ process_criclens_query_result <- function(query, df, status_callback = NULL) {
     is.character(explanation) &&
       length(explanation) == 1L &&
       !is.na(explanation) &&
-      nzchar(trimws(explanation))
+      nzchar(trimws(explanation)) &&
+      !substr(trimws(explanation), 1L, 1L) %in% c("{", "[")
   ) {
 
     if (!explanation_numeric_values_are_supported(
@@ -3081,7 +4583,7 @@ process_criclens_query_result <- function(query, df, status_callback = NULL) {
         "degraded",
         "NVIDIA NIM returned numerical claims not present in the verified R result. The unverified explanation was omitted."
       )
-      return(deterministic_result)
+      return(deterministic_fallback)
     }
 
     # Do not return NIM's API error/fallback notice as the
@@ -3108,5 +4610,5 @@ process_criclens_query_result <- function(query, df, status_callback = NULL) {
   # 8. Deterministic R-only fallback
   # ---------------------------------------------------------------
 
-  deterministic_result
+  deterministic_fallback
 }
