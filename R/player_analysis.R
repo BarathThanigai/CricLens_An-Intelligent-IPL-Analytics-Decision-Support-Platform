@@ -319,6 +319,95 @@ get_player_batting_profile <- function(
   return(profile)
 }
 
+#' Get Specific Player Bowling Deep Dive
+get_player_bowling_profile <- function(df, player_name) {
+  p_data <- df %>%
+    filter(bowler == player_name, innings %in% c(1, 2))
+
+  if (!nrow(p_data)) return(NULL)
+
+  p_data %>%
+    summarise(
+      player = player_name,
+      matches = length(unique(match_id)),
+      innings = length(unique(paste(match_id, innings))),
+      valid_balls = sum(valid_ball == 1, na.rm = TRUE),
+      overs_bowled = round(valid_balls / 6, 1),
+      runs_given = sum(runs_bowler, na.rm = TRUE),
+      wickets = sum(is_bowler_wicket, na.rm = TRUE),
+      economy = ifelse(valid_balls > 0, round(runs_given / (valid_balls / 6), 2), NA_real_),
+      average = ifelse(wickets > 0, round(runs_given / wickets, 2), NA_real_),
+      strike_rate = ifelse(wickets > 0, round(valid_balls / wickets, 2), NA_real_)
+    )
+}
+
+#' Aggregate a player's ball-level data to one row per match and innings.
+get_player_batting_breakdown <- function(df, player_name) {
+  df %>%
+    filter(batter == player_name, innings %in% c(1, 2)) %>%
+    group_by(season_year, match_id, innings) %>%
+    summarise(
+      runs = sum(runs_batter, na.rm = TRUE),
+      balls = sum(balls_faced == 1, na.rm = TRUE),
+      fours = sum(is_four, na.rm = TRUE),
+      sixes = sum(is_six, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(season_year, match_id, innings) %>%
+    mutate(match_number = row_number())
+}
+
+#' Aggregate a player's ball-level data to one row per match and innings.
+get_player_bowling_breakdown <- function(df, player_name) {
+  df %>%
+    filter(bowler == player_name, innings %in% c(1, 2)) %>%
+    group_by(season_year, match_id, innings) %>%
+    summarise(
+      wickets = sum(is_bowler_wicket, na.rm = TRUE),
+      runs_given = sum(runs_bowler, na.rm = TRUE),
+      valid_balls = sum(valid_ball == 1, na.rm = TRUE),
+      economy = ifelse(valid_balls > 0, runs_given / (valid_balls / 6), NA_real_),
+      .groups = "drop"
+    ) %>%
+    arrange(season_year, match_id, innings) %>%
+    mutate(match_number = row_number())
+}
+
+#' Aggregate a player's batting performance to one row per season.
+get_player_batting_season_breakdown <- function(df, player_name) {
+  d <- df %>%
+    filter(batter == player_name, innings %in% c(1, 2))
+  if (!nrow(d)) return(data.frame())
+  d %>%
+    group_by(season_year) %>%
+    summarise(
+      runs = sum(runs_batter, na.rm = TRUE),
+      balls = sum(balls_faced == 1, na.rm = TRUE),
+      outs = sum(player_out == player_name, na.rm = TRUE),
+      average = ifelse(outs > 0, runs / outs, NA_real_),
+      strike_rate = ifelse(balls > 0, 100 * runs / balls, NA_real_),
+      .groups = "drop"
+    ) %>%
+    arrange(season_year)
+}
+
+#' Aggregate a player's bowling performance to one row per season.
+get_player_bowling_season_breakdown <- function(df, player_name) {
+  d <- df %>%
+    filter(bowler == player_name, innings %in% c(1, 2))
+  if (!nrow(d)) return(data.frame())
+  d %>%
+    group_by(season_year) %>%
+    summarise(
+      wickets = sum(is_bowler_wicket, na.rm = TRUE),
+      runs_given = sum(runs_bowler, na.rm = TRUE),
+      valid_balls = sum(valid_ball == 1, na.rm = TRUE),
+      economy = ifelse(valid_balls > 0, runs_given / (valid_balls / 6), NA_real_),
+      .groups = "drop"
+    ) %>%
+    arrange(season_year)
+}
+
 
 #' Get Player Performance Breakdown by Phase
 get_player_phase_breakdown <- function(
