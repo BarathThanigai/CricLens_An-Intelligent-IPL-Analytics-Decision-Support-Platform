@@ -8,7 +8,7 @@
 library(shiny)
 library(bslib)
 
-cl_colors <- c(teal = "#087E8B", orange = "#C85B21", navy = "#2F4466", muted = "#526176")
+cl_colors <- c(teal = "#087E8B", orange = "#C85B21", navy = "#2F4466", muted = "#526176", gold = "#C89B24")
 
 # Small inline Lucide-style SVGs keep the Shiny UI crisp without a React or
 # JavaScript icon dependency. Names are intentionally shared across screens.

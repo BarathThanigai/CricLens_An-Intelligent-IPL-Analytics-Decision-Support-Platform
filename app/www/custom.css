@@ -162,6 +162,24 @@ table.dataTable td {
   margin-bottom: 0;
 }
 
+.cl-explorer-filter-list {
+  max-height: 34rem;
+  overflow-y: auto;
+  padding-right: 0.4rem;
+}
+
+.cl-explorer-filter-list .form-group {
+  margin-bottom: 0.65rem;
+}
+
+.player-empty-state {
+  color: var(--text-muted);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
 @media (max-width: 760px) {
   .global-filter-bar {
     grid-template-columns: 1fr;
@@ -170,5 +188,9 @@ table.dataTable td {
 
   .criclens-card {
     padding: 14px;
+  }
+
+  .cl-explorer-filter-list {
+    max-height: none;
   }
 }
