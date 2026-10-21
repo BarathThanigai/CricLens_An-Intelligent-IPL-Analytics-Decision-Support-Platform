@@ -12,6 +12,11 @@ apply_explorer_filters <- function(df, global_search = "", category_filters = li
   for (f in category_filters) {
     if (is.list(f) && length(f$column) && nzchar(f$column) && f$column %in% names(out) && length(f$values)) {
       out <- out[!is.na(out[[f$column]]) & as.character(out[[f$column]]) %in% as.character(f$values), , drop = FALSE]
+    } else if (is.list(f) && length(f$column) && nzchar(f$column) && f$column %in% names(out) &&
+               length(f$query) && nzchar(trimws(f$query))) {
+      keep <- grepl(tolower(trimws(f$query)), tolower(as.character(out[[f$column]])), fixed = TRUE)
+      keep[is.na(keep)] <- FALSE
+      out <- out[keep, , drop = FALSE]
     }
   }
   for (f in text_filters) {
@@ -25,8 +30,21 @@ apply_explorer_filters <- function(df, global_search = "", category_filters = li
     if (is.list(f) && length(f$column) && nzchar(f$column) && f$column %in% names(out) && is.numeric(out[[f$column]])) {
       x <- out[[f$column]]
       keep <- !is.na(x)
-      if (length(f$min) && is.finite(f$min)) keep <- keep & x >= f$min
-      if (length(f$max) && is.finite(f$max)) keep <- keep & x <= f$max
+      operator <- if (length(f$operator)) as.character(f$operator) else "range"
+      value <- if (length(f$value)) suppressWarnings(as.numeric(f$value)) else NA_real_
+      minimum <- if (length(f$min)) suppressWarnings(as.numeric(f$min)) else NA_real_
+      maximum <- if (length(f$max)) suppressWarnings(as.numeric(f$max)) else NA_real_
+      if (operator == "range" && !is.finite(minimum) && !is.finite(maximum)) next
+      if (operator != "range" && !is.finite(value)) next
+      if (operator == "=" && is.finite(value)) keep <- keep & x == value
+      if (operator == ">" && is.finite(value)) keep <- keep & x > value
+      if (operator == ">=" && is.finite(value)) keep <- keep & x >= value
+      if (operator == "<" && is.finite(value)) keep <- keep & x < value
+      if (operator == "<=" && is.finite(value)) keep <- keep & x <= value
+      if (operator == "range") {
+        if (is.finite(minimum)) keep <- keep & x >= minimum
+        if (is.finite(maximum)) keep <- keep & x <= maximum
+      }
       out <- out[keep, , drop = FALSE]
     }
   }
